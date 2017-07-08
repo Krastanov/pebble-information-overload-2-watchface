@@ -1,0 +1,103 @@
+{
+    "author": "Stefan Krastanov",
+    "dependencies": {
+        "pebble-clay": "^1.0.3",
+        "pebble-fctx": "^1.6.0"
+    },
+    "keywords": [],
+    "name": "infooverload2",
+    "pebble": {
+        "capabilities": [
+            "location",
+            "configurable",
+            "health"
+        ],
+        "displayName": "InfoOverload2",
+        "enableMultiJS": true,
+        "messageKeys": [
+            "WEATHER_ICON_KEY",
+            "WEATHER_ATEMPERATURE_KEY",
+            "WEATHER_ATEMPERATUREMAX_KEY",
+            "WEATHER_ATEMPERATUREMIN_KEY",
+            "WEATHER_TEMPERATURE_KEY",
+            "WEATHER_TEMPERATUREMAX_KEY",
+            "WEATHER_TEMPERATUREMIN_KEY",
+            "WEATHER_PRECIP_PROB_KEY",
+            "WEATHER_PRECIP_ARRAY_KEY"
+        ],
+        "projectType": "native",
+        "resources": {
+            "media": [
+                {
+                    "file": "images/Partly_Cloudy_Night_25.png",
+                    "name": "Partly_Cloudy_Night_25",
+                    "targetPlatforms": null,
+                    "type": "bitmap"
+                },
+                {
+                    "file": "images/Air_Element_25.png",
+                    "name": "Air_Element_25",
+                    "targetPlatforms": null,
+                    "type": "bitmap"
+                },
+                {
+                    "file": "images/Rain_25.png",
+                    "name": "Rain_25",
+                    "targetPlatforms": null,
+                    "type": "bitmap"
+                },
+                {
+                    "file": "images/Dust_25.png",
+                    "name": "Dust_25",
+                    "targetPlatforms": null,
+                    "type": "bitmap"
+                },
+                {
+                    "file": "images/Partly_Cloudy_Day_25.png",
+                    "name": "Partly_Cloudy_Day_25",
+                    "targetPlatforms": null,
+                    "type": "bitmap"
+                },
+                {
+                    "file": "images/Bright_Moon_25.png",
+                    "name": "Bright_Moon_25",
+                    "targetPlatforms": null,
+                    "type": "bitmap"
+                },
+                {
+                    "file": "images/Snow_25.png",
+                    "name": "Snow_25",
+                    "targetPlatforms": null,
+                    "type": "bitmap"
+                },
+                {
+                    "file": "images/Sun_25.png",
+                    "name": "Sun_25",
+                    "targetPlatforms": null,
+                    "type": "bitmap"
+                },
+                {
+                    "file": "images/Sleet_25.png",
+                    "name": "Sleet_25",
+                    "targetPlatforms": null,
+                    "type": "bitmap"
+                },
+                {
+                    "file": "images/Clouds_25.png",
+                    "name": "Clouds_25",
+                    "targetPlatforms": null,
+                    "type": "bitmap"
+                }
+            ]
+        },
+        "sdkVersion": "3",
+        "targetPlatforms": [
+            "diorite"
+        ],
+        "uuid": "28f5ee24-9c92-4b28-8868-64a6c4b37550",
+        "watchapp": {
+            "watchface": true
+        }
+    },
+    "version": "1.0.0"
+}
