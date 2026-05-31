@@ -12,11 +12,11 @@ module.exports = [
     "items": [
       {
         "type": "heading",
-        "defaultValue": "Darksky"
+        "defaultValue": "OpenWeather"
       },
       {
         "type": "input",
-        "messageKey": "DarkskyKey",
+        "messageKey": "OpenWeatherKey",
         "defaultValue": "",
         "label": "API Key"
       }
