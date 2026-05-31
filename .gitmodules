@@ -1,0 +1,3 @@
+[submodule "pebble-watchface-agent-skill"]
+	path = pebble-watchface-agent-skill
+	url = https://github.com/coredevices/pebble-watchface-agent-skill.git
