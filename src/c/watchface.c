@@ -30,6 +30,7 @@ static Layer* g_connection_layer;             // Layer updated on connection eve
 static TextLayer* g_health_cals_text_layer;   // Layer updated on health events.
 static TextLayer* g_health_meters_text_layer; // Layer updated on health events.
 static TextLayer* g_health_sleep_text_layer;  // Layer updated on health events.
+static Layer* g_health_bpm_heart_layer;       // Static heart symbol in the heart-rate row.
 static TextLayer* g_health_bpm_text_layer;    // Layer updated on heart beat events.
 static Layer* g_health_bpm_graph_layer;       // Layer updated on heart beat events or on minute ticks.
 static Layer* g_weather_temp_layer;           // Layer updated on weather events from PebbleKit messages.
@@ -131,33 +132,50 @@ static void on_health_bpm_graph_layer_update(Layer* layer, GContext* ctx) {
     graphics_fill_rect(ctx, GRect(16, 1, 1, 20), 0, GCornerNone);
 }
 
+static void on_health_bpm_heart_layer_update(Layer* layer, GContext* ctx) {
+    graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorRed, GColorWhite));
+    graphics_fill_rect(ctx, GRect(1, 3, 2, 1), 0, GCornerNone);
+    graphics_fill_rect(ctx, GRect(5, 3, 2, 1), 0, GCornerNone);
+    graphics_fill_rect(ctx, GRect(0, 4, 8, 2), 0, GCornerNone);
+    graphics_fill_rect(ctx, GRect(1, 6, 6, 1), 0, GCornerNone);
+    graphics_fill_rect(ctx, GRect(2, 7, 4, 1), 0, GCornerNone);
+    graphics_fill_rect(ctx, GRect(3, 8, 2, 1), 0, GCornerNone);
+    graphics_fill_rect(ctx, GRect(4, 9, 1, 1), 0, GCornerNone);
+}
+
 static void on_weather_temp_layer_update(Layer* layer, GContext* ctx) {
     char temp_string[4];
     if (g_temp < 101) {
         snprintf(temp_string, sizeof temp_string, "%d", g_temp);
+        graphics_context_set_text_color(ctx, GColorWhite);
         graphics_draw_text(ctx, temp_string,
                            fonts_get_system_font(FONT_KEY_GOTHIC_14),
                            GRect(0,7,18,15), GTextOverflowModeWordWrap, GTextAlignmentRight, NULL);
         snprintf(temp_string, sizeof temp_string, "%d", g_tempmax);
+        graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorRed, GColorWhite));
         graphics_draw_text(ctx, temp_string,
                            fonts_get_system_font(FONT_KEY_GOTHIC_14),
                            GRect(16-((g_tempmax<0)?5:0),0,18,15), GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
         snprintf(temp_string, sizeof temp_string, "%d", g_tempmin);
+        graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorBlue, GColorWhite));
         graphics_draw_text(ctx, temp_string,
                            fonts_get_system_font(FONT_KEY_GOTHIC_14),
                            GRect(16-((g_tempmin<0)?5:0),14,18,15), GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
         snprintf(temp_string, sizeof temp_string, "%d", g_atemp);
+        graphics_context_set_text_color(ctx, GColorWhite);
         graphics_draw_text(ctx, temp_string,
                            fonts_get_system_font(FONT_KEY_GOTHIC_14),
                            GRect(20,7,18,15), GTextOverflowModeWordWrap, GTextAlignmentRight, NULL);
         snprintf(temp_string, sizeof temp_string, "%d", g_atempmax);
+        graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorRed, GColorWhite));
         graphics_draw_text(ctx, temp_string,
                            fonts_get_system_font(FONT_KEY_GOTHIC_14),
-                           GRect(38-((g_tempmax<0)?5:0),0,18,15), GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
+                           GRect(38-((g_atempmax<0)?5:0),0,18,15), GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
         snprintf(temp_string, sizeof temp_string, "%d", g_atempmin);
+        graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorBlue, GColorWhite));
         graphics_draw_text(ctx, temp_string,
                            fonts_get_system_font(FONT_KEY_GOTHIC_14),
-                           GRect(38-((g_tempmin<0)?5:0),14,18,15), GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
+                           GRect(38-((g_atempmin<0)?5:0),14,18,15), GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
     }
 }
 
@@ -254,7 +272,7 @@ static void on_connection(bool connected) {
 
 static void on_health_heartrate() {
     static char bpm_string[8];
-    snprintf(bpm_string, sizeof bpm_string, "\U00002764%d", (int)health_service_peek_current_value(HealthMetricHeartRateBPM));
+    snprintf(bpm_string, sizeof bpm_string, "%d", (int)health_service_peek_current_value(HealthMetricHeartRateBPM));
     text_layer_set_text(g_health_bpm_text_layer, bpm_string);
 }
 
@@ -438,7 +456,11 @@ static void init() {
     layer_set_update_proc(g_health_bpm_graph_layer, &on_health_bpm_graph_layer_update);
     layer_add_child(window_layer, g_health_bpm_graph_layer);
 
-    g_health_bpm_text_layer = text_layer_create(GRect(1, bounds.size.h-43-40, 28, 14));
+    g_health_bpm_heart_layer = layer_create(GRect(1, bounds.size.h-43-40, 9, 14));
+    layer_set_update_proc(g_health_bpm_heart_layer, &on_health_bpm_heart_layer_update);
+    layer_add_child(window_layer, g_health_bpm_heart_layer);
+
+    g_health_bpm_text_layer = text_layer_create(GRect(10, bounds.size.h-43-40, 23, 14));
     layer_add_child(window_layer, text_layer_get_layer(g_health_bpm_text_layer));
     text_layer_set_background_color(g_health_bpm_text_layer, GColorBlack);
     text_layer_set_text_color(g_health_bpm_text_layer, GColorWhite);
@@ -531,6 +553,7 @@ static void deinit() {
     text_layer_destroy(g_health_cals_text_layer);
     text_layer_destroy(g_health_meters_text_layer);
     text_layer_destroy(g_health_sleep_text_layer);
+    layer_destroy(g_health_bpm_heart_layer);
     text_layer_destroy(g_health_bpm_text_layer);
     text_layer_destroy(g_my_message_layer);
     window_destroy(g_window);
