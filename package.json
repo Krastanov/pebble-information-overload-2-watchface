@@ -92,7 +92,7 @@
         },
         "sdkVersion": "3",
         "targetPlatforms": [
-            "diorite"
+            "emery"
         ],
         "uuid": "28f5ee24-9c92-4b28-8868-64a6c4b37550",
         "watchapp": {
