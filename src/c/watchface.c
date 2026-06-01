@@ -114,7 +114,7 @@ static void on_health_bpm_graph_layer_update(Layer* layer, GContext* ctx) {
     health_service_get_minute_history(&minute_data[0], 60, &t1, &t2);
     graphics_context_set_fill_color(ctx, GColorDarkGray);
     graphics_fill_rect(ctx, GRect(1, 11, 33, 1), 0, GCornerNone);
-    graphics_context_set_stroke_color(ctx, GColorWhite);
+    graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorRed, GColorWhite));
     int last_y = 20;
     for (int i=0; i<60; i++) {
         int y;
@@ -128,7 +128,9 @@ static void on_health_bpm_graph_layer_update(Layer* layer, GContext* ctx) {
             graphics_draw_line(ctx, GPoint(i+2-30, y), GPoint(i+2-30, 20));
         }
     }
+    graphics_context_set_stroke_color(ctx, GColorWhite);
     graphics_draw_rect(ctx, GRect(0,0,34,22));
+    graphics_context_set_fill_color(ctx, GColorDarkGray);
     graphics_fill_rect(ctx, GRect(16, 1, 1, 20), 0, GCornerNone);
 }
 
@@ -157,7 +159,7 @@ static void on_weather_temp_layer_update(Layer* layer, GContext* ctx) {
                            fonts_get_system_font(FONT_KEY_GOTHIC_14),
                            GRect(16-((g_tempmax<0)?5:0),0,18,15), GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
         snprintf(temp_string, sizeof temp_string, "%d", g_tempmin);
-        graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorBlue, GColorWhite));
+        graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite));
         graphics_draw_text(ctx, temp_string,
                            fonts_get_system_font(FONT_KEY_GOTHIC_14),
                            GRect(16-((g_tempmin<0)?5:0),14,18,15), GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
@@ -172,7 +174,7 @@ static void on_weather_temp_layer_update(Layer* layer, GContext* ctx) {
                            fonts_get_system_font(FONT_KEY_GOTHIC_14),
                            GRect(38-((g_atempmax<0)?5:0),0,18,15), GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
         snprintf(temp_string, sizeof temp_string, "%d", g_atempmin);
-        graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorBlue, GColorWhite));
+        graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite));
         graphics_draw_text(ctx, temp_string,
                            fonts_get_system_font(FONT_KEY_GOTHIC_14),
                            GRect(38-((g_atempmin<0)?5:0),14,18,15), GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
@@ -208,6 +210,7 @@ static void on_weather_precipprob_layer_update(Layer* layer, GContext* ctx) { //
     char percent_string[4];
     if (g_precipprob > 0) {
         snprintf(percent_string, sizeof percent_string, "%d", g_precipprob);
+        graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite));
         graphics_draw_text(ctx, percent_string,
                            fonts_get_system_font(FONT_KEY_GOTHIC_14),
                            GRect(0,2,20,15), GTextOverflowModeWordWrap, GTextAlignmentRight, NULL);
@@ -218,7 +221,7 @@ static void on_weather_precipprob_layer_update(Layer* layer, GContext* ctx) { //
 }
 
 static void on_weather_precipgraph_layer_update(Layer* layer, GContext* ctx) {
-    graphics_context_set_stroke_color(ctx, GColorWhite);
+    graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite));
     int count = 0;
     int i;
     for (i=0; i<45; i++) {
@@ -233,6 +236,7 @@ static void on_weather_precipgraph_layer_update(Layer* layer, GContext* ctx) {
         }
     }
     if (count > 0) {
+        graphics_context_set_stroke_color(ctx, GColorWhite);
         graphics_draw_rect(ctx, GRect(0,0,49,27));
         graphics_context_set_fill_color(ctx, GColorDarkGray);
         graphics_fill_rect(ctx, GRect(17, 1, 1, 25), 0, GCornerNone);
@@ -466,7 +470,7 @@ static void init() {
     g_health_bpm_text_layer = text_layer_create(GRect(10, bounds.size.h-43-40, 23, 14));
     layer_add_child(window_layer, text_layer_get_layer(g_health_bpm_text_layer));
     text_layer_set_background_color(g_health_bpm_text_layer, GColorBlack);
-    text_layer_set_text_color(g_health_bpm_text_layer, GColorWhite);
+    text_layer_set_text_color(g_health_bpm_text_layer, PBL_IF_COLOR_ELSE(GColorRed, GColorWhite));
     text_layer_set_font(g_health_bpm_text_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
     
     g_health_meters_text_layer = text_layer_create(GRect(33, bounds.size.h-43-40, 38, 14));
