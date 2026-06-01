@@ -56,6 +56,18 @@ function firstData(response) {
   return response && response.data && response.data.length ? response.data[0] : null;
 }
 
+function maxPopPercent(response) {
+  var data = response && response.data ? response.data : [];
+  var maxPop = null;
+  for (var i=0; i<data.length; i++) {
+    var pop = data[i] && data[i].pop;
+    if (typeof pop === 'number' && isFinite(pop)) {
+      maxPop = maxPop === null ? pop : Math.max(maxPop, pop);
+    }
+  }
+  return maxPop === null ? null : Math.round(maxPop*100);
+}
+
 function requestJson(url, done) {
   var req = new XMLHttpRequest();
   req.addEventListener("load", function (){
@@ -89,7 +101,7 @@ function sendWeather() {
         navigator.geolocation.getCurrentPosition(
         function (pos){
             console.log("Got position, setting up OpenWeather requests.");
-            var pending = 3;
+            var pending = 4;
             var hasWeatherData = false;
             var json = {};
             var query = "?lat="+pos.coords.latitude+"&lon="+pos.coords.longitude+"&units=metric&appid="+encodeURIComponent(OpenWeatherKey);
@@ -135,7 +147,14 @@ function sendWeather() {
                 put(3, apparentTemps.length ? Math.round(Math.min.apply(null, apparentTemps)) : 101); // Celsius
                 put(5, day.temp ? roundValue(day.temp.max, 101) : 101);                              // Celsius
                 put(6, day.temp ? roundValue(day.temp.min, 101) : 101);                              // Celsius
-                put(7, roundValue(day.pop*100, 0));                                                   // Percents
+              }
+              finishRequest();
+            });
+
+            requestJson(baseUrl+"timeline/1h"+query, function (response){
+              var precipProb = maxPopPercent(response);
+              if (precipProb !== null) {
+                put(7, precipProb);                                                                  // Percents
               }
               finishRequest();
             });
