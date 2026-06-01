@@ -430,11 +430,14 @@ static void init() {
     layer_set_update_proc(g_weather_temp_layer, &on_weather_temp_layer_update);
     layer_add_child(window_layer, g_weather_temp_layer);
 
-    g_weather_precipprob_layer = layer_create(GRect(71, bounds.size.h-30, 20, 30));
+    GRect weather_precipgraph_frame = GRect(bounds.size.w-51, bounds.size.h-27, 49, 27);
+    int weather_precipprob_width = 20;
+    int weather_precipprob_x = weather_precipgraph_frame.origin.x-weather_precipprob_width-1;
+    g_weather_precipprob_layer = layer_create(GRect(weather_precipprob_x, bounds.size.h-30, weather_precipprob_width, 30));
     layer_set_update_proc(g_weather_precipprob_layer, &on_weather_precipprob_layer_update);
     layer_add_child(window_layer, g_weather_precipprob_layer);
     
-    g_weather_precipgraph_layer = layer_create(GRect(bounds.size.w-51, bounds.size.h-27, 49, 27));
+    g_weather_precipgraph_layer = layer_create(weather_precipgraph_frame);
     layer_set_update_proc(g_weather_precipgraph_layer, &on_weather_precipgraph_layer_update);
     layer_add_child(window_layer, g_weather_precipgraph_layer);
 
