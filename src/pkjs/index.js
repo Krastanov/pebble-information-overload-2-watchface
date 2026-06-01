@@ -68,6 +68,44 @@ function maxPopPercent(response) {
   return maxPop === null ? null : Math.round(maxPop*100);
 }
 
+function interpolateNumber(a, b, fraction) {
+  var hasA = typeof a === 'number' && isFinite(a);
+  var hasB = typeof b === 'number' && isFinite(b);
+  if (hasA && hasB) {return a+(b-a)*fraction;}
+  if (hasA) {return a;}
+  if (hasB) {return b;}
+  return null;
+}
+
+function encodeGraphTemp(value) {
+  if (typeof value !== 'number' || !isFinite(value)) {return 255;}
+  return Math.max(0, Math.min(254, Math.round(value)+100));
+}
+
+function encodeGraphPrecipProbability(value) {
+  if (typeof value !== 'number' || !isFinite(value)) {return 255;}
+  return Math.max(0, Math.min(100, Math.round(value*100)));
+}
+
+function buildDayGraphData(hourlyData) {
+  var temps = [];
+  var precip = [];
+  hourlyData = hourlyData || [];
+  for (var i=0; i<48; i++) {
+    var hourIndex = Math.floor(i/2);
+    var fraction = (i%2) ? 0.5 : 0;
+    var current = hourlyData[hourIndex] || null;
+    var next = hourlyData[hourIndex+1] || current;
+    temps.push(encodeGraphTemp(interpolateNumber(current && current.feels_like,
+                                                 next && next.feels_like,
+                                                 fraction)));
+    precip.push(encodeGraphPrecipProbability(interpolateNumber(current && current.pop,
+                                                               next && next.pop,
+                                                               fraction)));
+  }
+  return {temps: temps, precip: precip};
+}
+
 function requestJson(url, done) {
   var req = new XMLHttpRequest();
   req.addEventListener("load", function (){
@@ -152,11 +190,32 @@ function sendWeather() {
             });
 
             requestJson(baseUrl+"timeline/1h"+query, function (response){
-              var precipProb = maxPopPercent(response);
-              if (precipProb !== null) {
-                put(7, precipProb);                                                                  // Percents
+              var hourlyData = response && response.data ? response.data.slice(0) : [];
+
+              function finishHourlyTimeline(data) {
+                if (data.length) {
+                  var precipProb = maxPopPercent({data: data.slice(0, 25)});
+                  var graphData = buildDayGraphData(data);
+                  if (precipProb !== null) {
+                    put(7, precipProb);                                                              // Percents
+                  }
+                  put(12, graphData.temps);                                                          // Apparent temp, Celsius + 100
+                  put(13, graphData.precip);                                                         // Precipitation probability
+                }
+                finishRequest();
               }
-              finishRequest();
+
+              var lastHour = hourlyData.length ? hourlyData[hourlyData.length-1] : null;
+              if (hourlyData.length > 0 && hourlyData.length < 25 && lastHour && lastHour.dt) {
+                requestJson(baseUrl+"timeline/1h"+query+"&start="+(lastHour.dt+3600), function (nextResponse){
+                  if (nextResponse && nextResponse.data) {
+                    hourlyData = hourlyData.concat(nextResponse.data);
+                  }
+                  finishHourlyTimeline(hourlyData);
+                });
+              } else {
+                finishHourlyTimeline(hourlyData);
+              }
             });
 
             requestJson(baseUrl+"timeline/1min"+query, function (response){

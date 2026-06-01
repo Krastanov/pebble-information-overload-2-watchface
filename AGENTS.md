@@ -3,7 +3,7 @@
 ## Project Summary
 
 This repository contains `InfoOverload2`, a Pebble SDK 3 native watchface for
-the `diorite` target platform. It is intentionally dense: the screen combines
+the `emery` target platform. It is intentionally dense: the screen combines
 status indicators, a short fetched report, time/date, health metrics, and local
 weather.
 
@@ -84,13 +84,31 @@ Typical Pebble SDK commands from the repository root:
 
 ```sh
 pebble build
-pebble install --emulator diorite
+pebble install --emulator emery
 ```
 
 For a physical watch, use the normal Pebble CLI install flow for the configured
-phone/watch environment. This repository targets `diorite`; the UI uses many
+phone/watch environment. This repository targets `emery`; the UI uses many
 hardcoded positions and should be checked carefully before changing target
 platforms.
+
+To test watch-side weather graph rendering without waiting for phone-side
+weather fetches, install the app in the emulator and send synthetic AppMessage
+byte arrays:
+
+```sh
+pebble build
+pebble install --emulator emery
+TEMP_HEX=$(node -e "let out=''; for (let i=0;i<48;i++){let v=Math.round(12+8*Math.sin(i/47*Math.PI)); out+=(v+100).toString(16).padStart(2,'0');} console.log(out)")
+PRECIP_HEX=$(node -e "let out=''; for (let i=0;i<48;i++){let v=Math.max(0, Math.round(80-4*Math.abs(i-28))); out+=v.toString(16).padStart(2,'0');} console.log(out)")
+pebble send-app-message --emulator emery --bytes 12=$TEMP_HEX 13=$PRECIP_HEX
+pebble screenshot --emulator emery screenshot-weather-day-graph-verified.png
+```
+
+Key `12` is the rolling day apparent-temperature graph, encoded as Celsius
+plus `100`. Key `13` is the rolling day precipitation-probability graph,
+encoded as percent from `0` to `100`. Byte value `255` means unknown/missing.
+Do not commit temporary OpenWeather API keys used for local manual testing.
 
 ## Runtime Data Flow
 
@@ -134,22 +152,24 @@ from the phone.
 
 - Layer pointers and state fields are declared near the top of
   `src/c/watchface.c`.
-- `MESSAGE_BUF` is currently 512 bytes and is used for both AppSync backing
+- `MESSAGE_BUF` is currently 768 bytes and is used for both AppSync backing
   storage and AppMessage inbox/outbox size.
 - Unknown weather temperatures use sentinel value `101`.
 - `g_weather_precip_array` stores up to 60 minutes of precipitation intensity
   data received from the phone.
+- `g_weather_day_atemp_array` and `g_weather_day_precip_array` store 48
+  half-hour samples for the rolling 24-hour weather graph. Unknown samples use
+  sentinel byte value `255`.
 - `g_report_string` stores the phone-fetched report text.
 
 `enum CommKey`
 
 - Defines the watch-side numeric AppMessage contract from key `0x0` through
-  `0xB`.
+  `0xD`.
 - Keep this enum synchronized with the numeric keys in `src/pkjs/index.js`.
-- `package.json` currently declares message key names only through
-  `WEATHER_PRECIP_ARRAY_KEY`; the running code still uses numeric JS keys for
-  humidity, wind, and report. If moving to named keys, update the manifest,
-  JavaScript, and C together.
+- `package.json` declares the message key names, but the runtime JavaScript
+  still sends numeric keys directly. Keep the manifest, JavaScript numeric
+  keys, and C enum synchronized.
 
 `Drawing functions`
 
@@ -164,11 +184,16 @@ from the phone.
 - `on_weather_precipprob_layer_update()` draws precipitation probability.
 - `on_weather_precipgraph_layer_update()` draws the short-term precipitation
   graph, shifted forward by minute ticks since the last weather update.
+- `on_weather_day_graph_layer_update()` draws the rolling 24-hour graph just
+  to the right of the apparent temperatures. It is 48 pixels wide inside its
+  border, one pixel per half-hour. Grid lines mark 6, 12, and 18 hours from
+  the start of the current forecast window. Apparent temperature is drawn in
+  red. Precipitation probability is drawn as a cyan fill from the bottom up.
 
 `System event handlers`
 
 - `on_tick_timer()` updates time/date every minute, advances the precipitation
-  graph offset, and refreshes the heart-rate and precipitation graph layers.
+  graph offsets, and refreshes the heart-rate and weather graph layers.
 - `on_battery_state()` stores battery percent and redraws the battery layer.
 - `on_connection()` stores current Pebble app connection state and redraws the
   connection layer.
@@ -209,19 +234,25 @@ The phone owns:
 
 Configuration storage
 
-- At startup, `DarkskyKey` and `ReportSource` are loaded from `localStorage`.
+- At startup, `OpenWeatherKey` and `ReportSource` are loaded from
+  `localStorage`.
 - `showConfiguration` opens the Clay-generated settings URL.
 - `webviewclosed` parses the Clay response and persists both settings.
 
 Weather fetch
 
-- `sendWeather()` exits unless `DarkskyKey` is present.
+- `sendWeather()` exits unless `OpenWeatherKey` is present.
 - It calls `navigator.geolocation.getCurrentPosition()` with low accuracy,
   a 10 minute maximum cached age, and a 10 second timeout.
-- It requests the Dark Sky forecast endpoint with SI units.
+- It requests OpenWeather One Call 4.0 endpoints with metric units.
 - It converts the returned JSON into numeric AppMessage fields:
   icon id, apparent temperature, actual temperature, daily highs/lows,
-  precipitation probability, minute precipitation array, humidity, and wind.
+  precipitation probability, minute precipitation array, humidity, wind, and
+  rolling day graph arrays.
+- The rolling day graph is based on OpenWeather hourly data. The first sample
+  is the current/first returned forecast hour, not midnight. The JavaScript
+  interpolates hourly data into 48 half-hour samples and requests the next
+  hourly page when the default response has fewer than 25 hours.
 - It sends those fields with `Pebble.sendAppMessage(json)`.
 
 Report fetch
@@ -238,7 +269,7 @@ Scheduling
 Clay settings
 
 - `src/pkjs/config.js` defines two input fields:
-  `DarkskyKey` and `ReportSource`.
+  `OpenWeatherKey` and `ReportSource`.
 - These are configuration values for the phone-side JavaScript. They are not
   AppMessage keys used directly by the C watchface.
 
@@ -278,6 +309,10 @@ Weather area
 - Humidity and wind text above the bottom row.
 - Precipitation probability.
 - Short-term precipitation graph at the lower right.
+- Rolling 24-hour graph beside the apparent temperatures. It plots apparent
+  temperature in red and precipitation probability as a cyan bottom fill. Each
+  inner pixel is 30 minutes, so the 6/12/18-hour grid lines are at x offsets
+  12, 24, and 36 inside the border.
 
 Phone-watch communication layer
 
@@ -313,6 +348,8 @@ the source of truth when changing either side.
 | `9` / `0x9` | `WEATHER_HUMIDITY_KEY` | JS weather fetch | Current humidity as percent | Updates humidity TextLayer |
 | `10` / `0xA` | `WEATHER_WIND_SPEED_KEY` | JS weather fetch | Wind speed multiplied by 10 | Displays integer meters per second after dividing by 10 |
 | `11` / `0xB` | `REPORT_KEY` | JS report fetch | C string, first 99 response characters | Updates report TextLayer |
+| `12` / `0xC` | `WEATHER_DAY_ATEMP_ARRAY_KEY` | JS hourly weather fetch | 48 bytes, apparent temperature in Celsius plus `100`, or `255` unknown | Resets rolling day graph age counter and redraws day graph |
+| `13` / `0xD` | `WEATHER_DAY_PRECIP_ARRAY_KEY` | JS hourly weather fetch | 48 bytes, precipitation probability percent from `0` to `100`, or `255` unknown | Resets rolling day graph age counter and redraws day graph |
 
 Notes:
 
@@ -323,6 +360,9 @@ Notes:
   `app_message_open()`.
 - AppMessage is asynchronous. Use Pebble logs when debugging failed sends or
   dropped messages.
+- For emulator testing with `pebble send-app-message`, use the numeric C keys
+  rather than manifest key names, for example `--bytes 12=$TEMP_HEX
+  13=$PRECIP_HEX`.
 
 ## Dependencies
 
@@ -344,7 +384,7 @@ Notes:
 - Any service subscription in `init()` should have a matching unsubscribe in
   `deinit()`.
 - The UI is densely packed and mostly absolute-positioned. After layout edits,
-  verify on the `diorite` screen size and check overlap around the bottom
+  verify on the `emery` screen size and check overlap around the bottom
   weather/health rows.
 - The code contains existing TODOs around sentinel values, message key naming,
   memory cleanup, and calorie display. Preserve those concerns when refactoring.

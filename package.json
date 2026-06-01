@@ -23,7 +23,12 @@
             "WEATHER_TEMPERATUREMAX_KEY",
             "WEATHER_TEMPERATUREMIN_KEY",
             "WEATHER_PRECIP_PROB_KEY",
-            "WEATHER_PRECIP_ARRAY_KEY"
+            "WEATHER_PRECIP_ARRAY_KEY",
+            "WEATHER_HUMIDITY_KEY",
+            "WEATHER_WIND_SPEED_KEY",
+            "REPORT_KEY",
+            "WEATHER_DAY_ATEMP_ARRAY_KEY",
+            "WEATHER_DAY_PRECIP_ARRAY_KEY"
         ],
         "projectType": "native",
         "resources": {
