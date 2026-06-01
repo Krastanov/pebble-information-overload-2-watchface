@@ -73,6 +73,70 @@ enum CommKey {
   REPORT_KEY = 0xB
 };
 
+static GColor weather_icon_color(uint8_t weather_icon) {
+    switch (weather_icon) {
+        case 1:  // clear day
+        case 9:  // partly cloudy day
+            return PBL_IF_COLOR_ELSE(GColorYellow, GColorWhite);
+        case 3:  // rain/thunderstorm
+        case 4:  // snow
+        case 5:  // sleet
+            return PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite);
+        case 2:  // clear night
+        case 6:  // wind
+        case 7:  // fog/haze/dust
+        case 8:  // cloudy
+        case 10: // partly cloudy night
+        default:
+            return GColorWhite;
+    }
+}
+
+static uint8_t palette_size_for_format(GBitmapFormat format) {
+    switch (format) {
+        case GBitmapFormat1BitPalette: return 2;
+        case GBitmapFormat2BitPalette: return 4;
+        case GBitmapFormat4BitPalette: return 16;
+        default: return 0;
+    }
+}
+
+static void tint_weather_icon_bitmap(GBitmap* bitmap, GColor tint_color) {
+    GBitmapFormat format = gbitmap_get_format(bitmap);
+    uint8_t palette_size = palette_size_for_format(format);
+    if (palette_size) {
+        GColor* palette = gbitmap_get_palette(bitmap);
+        if (!palette) {return;}
+        for (int i=0; i<palette_size; i++) {
+            if (palette[i].a != 0) {
+                uint8_t alpha = palette[i].a;
+                palette[i] = tint_color;
+                palette[i].a = alpha;
+            }
+        }
+        return;
+    }
+
+    if (format != GBitmapFormat8Bit) {return;}
+
+    GRect bounds = gbitmap_get_bounds(bitmap);
+    uint8_t* data = gbitmap_get_data(bitmap);
+    uint16_t bytes_per_row = gbitmap_get_bytes_per_row(bitmap);
+    if (!data || bytes_per_row == 0) {return;}
+
+    for (int y=0; y<bounds.size.h; y++) {
+        for (int x=0; x<bounds.size.w; x++) {
+            uint8_t* pixel = data + y * bytes_per_row + x;
+            GColor pixel_color = (GColor){.argb = *pixel};
+            if (pixel_color.a != 0) {
+                GColor tinted_pixel = tint_color;
+                tinted_pixel.a = pixel_color.a;
+                *pixel = tinted_pixel.argb;
+            }
+        }
+    }
+}
+
 // --------------------------------------------------------------------------
 // Drawing function.
 // --------------------------------------------------------------------------
@@ -201,6 +265,8 @@ static void on_weather_icon_layer_update(Layer* layer, GContext* ctx) {
             case 10: resource_id = RESOURCE_ID_Partly_Cloudy_Night_25; break;
         }
         s_bitmap  = gbitmap_create_with_resource(resource_id);
+        if (!s_bitmap) {return;}
+        tint_weather_icon_bitmap(s_bitmap, weather_icon_color(g_weather_icon));
         graphics_context_set_compositing_mode(ctx, GCompOpSet);
         graphics_draw_bitmap_in_rect(ctx, s_bitmap, GRect(0,0,25,25));
     }
