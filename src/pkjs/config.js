@@ -38,6 +38,27 @@ module.exports = [
     ]
   },
   {
+    "type": "section",
+    "items": [
+      {
+        "type": "heading",
+        "defaultValue": "Calendars"
+      },
+      {
+        "type": "input",
+        "messageKey": "CalendarUrls",
+        "defaultValue": "",
+        "label": "ICS URLs"
+      },
+      {
+        "type": "input",
+        "messageKey": "CalendarColors",
+        "defaultValue": "",
+        "label": "Colors"
+      }
+    ]
+  },
+  {
     "type": "submit",
     "defaultValue": "Save Settings"
   }

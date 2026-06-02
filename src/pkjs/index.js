@@ -1,10 +1,22 @@
 var OpenWeatherKey = localStorage.getItem("OpenWeatherKey");
 var ReportSource = localStorage.getItem("ReportSource");
+var CalendarUrls = localStorage.getItem("CalendarUrls");
+var CalendarColors = localStorage.getItem("CalendarColors");
 
 var Clay = require('pebble-clay');
+var ICAL = require('ical.js');
 var clayConfig = require('./config');
 var clay = new Clay(clayConfig, null, { autoHandleEvents: false });
 var WEATHER_TEMP_UNKNOWN = -128;
+var REPORT_KEY = 11;
+var CALENDAR_KEY = 17;
+var CALENDAR_COLORS_KEY = 18;
+var REPORT_TEXT_MAX_LENGTH = 219;
+var CALENDAR_TEXT_MAX_LENGTH = 255;
+var CALENDAR_MAX_EVENTS = 8;
+var CALENDAR_ROW_MAX_LENGTH = 28;
+var CALENDAR_LOOKAHEAD_DAYS = 90;
+var CALENDAR_RECURRENCE_SCAN_LIMIT = 5000;
 
 Pebble.addEventListener('showConfiguration', function(e) {
   Pebble.openURL(clay.generateUrl());
@@ -17,6 +29,11 @@ Pebble.addEventListener('webviewclosed', function(e) {
   localStorage.setItem("OpenWeatherKey", OpenWeatherKey);
   ReportSource = json_resp.ReportSource.value;
   localStorage.setItem("ReportSource", ReportSource);
+  CalendarUrls = json_resp.CalendarUrls.value;
+  localStorage.setItem("CalendarUrls", CalendarUrls);
+  CalendarColors = json_resp.CalendarColors.value;
+  localStorage.setItem("CalendarColors", CalendarColors);
+  sendCalendar();
 });
 
 var iconNameToId = {
@@ -167,6 +184,148 @@ function buildDayGraphData(hourlyData) {
   return {temps: temps, precip: precip};
 }
 
+function truncateText(value, maxLength) {
+  value = value || "";
+  if (value.length <= maxLength) {return value;}
+  return value.substring(0, maxLength);
+}
+
+function cleanSingleLineText(value) {
+  value = value || "";
+  value = value.replace(/\s+/g, " ");
+  return value.replace(/^\s+|\s+$/g, "");
+}
+
+function splitCalendarUrls(value) {
+  var urls = [];
+  var parts = (value || "").split(",");
+  for (var i=0; i<parts.length; i++) {
+    var url = parts[i].replace(/^\s+|\s+$/g, "");
+    if (url) {
+      urls.push(url);
+    }
+  }
+  return urls;
+}
+
+function calendarColorId(value) {
+  value = cleanSingleLineText(value).toLowerCase();
+  if (value === "green") {return 1;}
+  if (value === "blue") {return 2;}
+  if (value === "red") {return 3;}
+  if (value === "yellow") {return 4;}
+  if (value === "cyan") {return 5;}
+  if (value === "magenta") {return 6;}
+  if (value === "orange") {return 7;}
+  if (value === "purple") {return 8;}
+  return 0;
+}
+
+function parseCalendarColors(value) {
+  var colorIds = [];
+  var parts = (value || "").split(",");
+  for (var i=0; i<parts.length; i++) {
+    colorIds.push(calendarColorId(parts[i]));
+  }
+  return colorIds;
+}
+
+function padTwo(value) {
+  return value < 10 ? "0" + value : "" + value;
+}
+
+function formatCalendarTime(time) {
+  if (!time) {return "--:--";}
+  if (time.isDate) {return "All day";}
+
+  var date = time.toJSDate();
+  return padTwo(date.getHours()) + ":" + padTwo(date.getMinutes());
+}
+
+function addCalendarOccurrence(events, item, startDate, nowUnix, limitUnix, colorId) {
+  if (!startDate) {return;}
+
+  var startUnix = startDate.toUnixTime();
+  if (startUnix < nowUnix || startUnix > limitUnix) {return;}
+
+  events.push({
+    startUnix: startUnix,
+    startDate: startDate,
+    summary: cleanSingleLineText(item && item.summary) || "(untitled)",
+    colorId: colorId || 0
+  });
+}
+
+function collectRecurringCalendarEvents(events, event, nowUnix, limitUnix, colorId) {
+  var iterator = event.iterator();
+  var occurrence = null;
+  var scanCount = 0;
+  var eventCount = 0;
+
+  while ((occurrence = iterator.next()) && scanCount < CALENDAR_RECURRENCE_SCAN_LIMIT) {
+    scanCount += 1;
+
+    var details = event.getOccurrenceDetails(occurrence);
+    if (!details || !details.startDate) {continue;}
+
+    var startUnix = details.startDate.toUnixTime();
+    if (startUnix > limitUnix) {break;}
+    if (startUnix < nowUnix) {continue;}
+
+    addCalendarOccurrence(events, details.item || event, details.startDate,
+                          nowUnix, limitUnix, colorId);
+    eventCount += 1;
+    if (eventCount >= CALENDAR_MAX_EVENTS) {break;}
+  }
+}
+
+function buildUpcomingCalendarEvents(icsText, now, colorId) {
+  var calendar = new ICAL.Component(ICAL.parse(icsText));
+  var components = calendar.getAllSubcomponents("vevent");
+  var nowUnix = Math.floor(now.getTime()/1000);
+  var limitUnix = nowUnix + CALENDAR_LOOKAHEAD_DAYS*24*60*60;
+  var events = [];
+
+  for (var i=0; i<components.length; i++) {
+    try {
+      var event = new ICAL.Event(components[i]);
+      if (event.isRecurrenceException()) {continue;}
+      if (!event.startDate) {continue;}
+
+      if (event.isRecurring()) {
+        collectRecurringCalendarEvents(events, event, nowUnix, limitUnix, colorId);
+      } else {
+        addCalendarOccurrence(events, event, event.startDate, nowUnix, limitUnix, colorId);
+      }
+    } catch (e) {
+      console.log("Calendar event parse failed: " + e.message);
+    }
+  }
+
+  events.sort(function(a, b) {
+    return a.startUnix - b.startUnix;
+  });
+
+  return events.slice(0, CALENDAR_MAX_EVENTS);
+}
+
+function buildCalendarMessage(events) {
+  var rows = [];
+  for (var i=0; i<events.length; i++) {
+    rows.push(truncateText(formatCalendarTime(events[i].startDate) + " " +
+                           events[i].summary, CALENDAR_ROW_MAX_LENGTH));
+  }
+  return truncateText(rows.join("\n"), CALENDAR_TEXT_MAX_LENGTH);
+}
+
+function buildCalendarColorData(events) {
+  var colors = [];
+  for (var i=0; i<events.length; i++) {
+    colors.push(events[i].colorId || 0);
+  }
+  return colors;
+}
+
 function requestJson(url, done) {
   var req = new XMLHttpRequest();
   req.addEventListener("load", function (){
@@ -313,15 +472,81 @@ function sendReport() {
     if (ReportSource!==null) {
         var req = new XMLHttpRequest();
         req.addEventListener("load", function (){
+            if (req.status && (req.status < 200 || req.status >= 300)) {
+                console.log("Report request failed: " + req.status);
+                return;
+            }
             // TODO Fix the message key issue and use descriptive keys!
-            var json = {11:req.response.substring(0,99)};
+            var json = {};
+            json[REPORT_KEY] = truncateText(req.responseText || req.response || "",
+                                            REPORT_TEXT_MAX_LENGTH);
             Pebble.sendAppMessage(json);
+        });
+        req.addEventListener("error", function (){
+            console.log("Report request failed.");
         });
         req.open("GET", ReportSource);
         req.send();
     }
 }
 
-Pebble.addEventListener("ready", function() {sendWeather(); sendReport();});
+function sendCalendar() {
+    var urls = splitCalendarUrls(CalendarUrls);
+    if (!urls.length) {return;}
 
-setInterval(function(){sendWeather(); sendReport();}, 30*60*1000);
+    var calendarColorIds = parseCalendarColors(CalendarColors);
+    var pending = urls.length;
+    var allEvents = [];
+    var sawCalendarData = false;
+    var now = new Date();
+
+    function finishCalendarRequest() {
+        pending -= 1;
+        if (pending !== 0) {return;}
+
+        if (sawCalendarData) {
+            allEvents.sort(function(a, b) {
+                return a.startUnix - b.startUnix;
+            });
+            var visibleEvents = allEvents.slice(0, CALENDAR_MAX_EVENTS);
+            var json = {};
+            json[CALENDAR_KEY] = buildCalendarMessage(visibleEvents);
+            json[CALENDAR_COLORS_KEY] = buildCalendarColorData(visibleEvents);
+            Pebble.sendAppMessage(json);
+        }
+    }
+
+    for (var i=0; i<urls.length; i++) {
+        (function (url, colorId){
+            var req = new XMLHttpRequest();
+            req.addEventListener("load", function (){
+                if (req.status && (req.status < 200 || req.status >= 300)) {
+                    console.log("Calendar request failed: " + req.status + " " + url);
+                    finishCalendarRequest();
+                    return;
+                }
+
+                try {
+                    allEvents = allEvents.concat(
+                        buildUpcomingCalendarEvents(req.responseText || req.response || "",
+                                                    now, colorId)
+                    );
+                    sawCalendarData = true;
+                } catch (e) {
+                    console.log("Calendar parse failed: " + e.message + " " + url);
+                }
+                finishCalendarRequest();
+            });
+            req.addEventListener("error", function (){
+                console.log("Calendar request failed: " + url);
+                finishCalendarRequest();
+            });
+            req.open("GET", url);
+            req.send();
+        })(urls[i], calendarColorIds[i] || 0);
+    }
+}
+
+Pebble.addEventListener("ready", function() {sendWeather(); sendReport(); sendCalendar();});
+
+setInterval(function(){sendWeather(); sendReport(); sendCalendar();}, 30*60*1000);

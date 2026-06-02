@@ -5,7 +5,7 @@
 #include "plot.h"
 
 // message buffer size:
-#define MESSAGE_BUF 768
+#define MESSAGE_BUF 1024
 #define WEATHER_DAY_GRAPH_SAMPLES 48
 #define WEATHER_DAY_GRAPH_UNKNOWN 255
 #define WEATHER_TEMP_UNKNOWN ((int8_t)-128)
@@ -14,6 +14,16 @@
 #define WEATHER_PERCENT_UNKNOWN 101
 #define WEATHER_PRECIP_GRAPH_WIDTH 49
 #define WEATHER_PRECIP_GRAPH_INNER_WIDTH (WEATHER_PRECIP_GRAPH_WIDTH - 4)
+#define TOP_DATA_BOTTOM 113
+#define REPORT_DATA_Y 17
+#define REPORT_DATA_HEIGHT (TOP_DATA_BOTTOM - REPORT_DATA_Y)
+#define CALENDAR_DATA_Y 0
+#define CALENDAR_DATA_HEIGHT (TOP_DATA_BOTTOM - CALENDAR_DATA_Y)
+#define REPORT_TEXT_LENGTH 220
+#define CALENDAR_TEXT_LENGTH 256
+#define CALENDAR_ENTRY_COUNT 8
+#define CALENDAR_ROW_HEIGHT 14
+#define CALENDAR_BAR_WIDTH 3
 
 // TODO Add `const` where appropriate!
 // TODO not all memory is released?
@@ -50,8 +60,8 @@ static Layer* g_weather_detail_layer;         // Layer updated on weather events
 static Layer* g_weather_day_graph_layer;      // Layer updated on weather events from PebbleKit messages or on minute ticks.
 static TextLayer* g_weather_humidity_layer;   // Layer updated on weather events from PebbleKit messages.
 static TextLayer* g_weather_wind_layer;       // Layer updated on weather events from PebbleKit messages.
-static TextLayer* g_my_message_layer;         // A reminder about 2016.
 static TextLayer* g_report_layer;             // General purpose report layer - text generated in javascript.
+static Layer* g_calendar_layer;               // Upcoming calendar events generated in javascript.
 static struct tm g_local_time;
 static uint8_t g_battery_level;
 static int8_t g_connected; // TODO Should be bool!
@@ -72,7 +82,9 @@ static uint8_t g_weather_uv_index = WEATHER_DETAIL_UNKNOWN;
 static uint8_t g_weather_cloud_cover = WEATHER_PERCENT_UNKNOWN;
 static uint8_t g_weather_visibility_km = WEATHER_DETAIL_UNKNOWN;
 static bool g_show_short_precipgraph;
-static char g_report_string[100];
+static char g_report_string[REPORT_TEXT_LENGTH];
+static char g_calendar_string[CALENDAR_TEXT_LENGTH];
+static uint8_t g_calendar_color_array[CALENDAR_ENTRY_COUNT];
 static AppSync g_sync;
 static uint8_t g_sync_buffer[MESSAGE_BUF];
 
@@ -93,7 +105,9 @@ enum CommKey {
   WEATHER_DAY_PRECIP_ARRAY_KEY = 0xD,
   WEATHER_UV_INDEX_KEY = 0xE,
   WEATHER_CLOUD_COVER_KEY = 0xF,
-  WEATHER_VISIBILITY_KEY = 0x10
+  WEATHER_VISIBILITY_KEY = 0x10,
+  CALENDAR_KEY = 0x11,
+  CALENDAR_COLORS_KEY = 0x12
 };
 
 static GColor weather_icon_color(uint8_t weather_icon) {
@@ -112,6 +126,20 @@ static GColor weather_icon_color(uint8_t weather_icon) {
         case 10: // partly cloudy night
         default:
             return GColorWhite;
+    }
+}
+
+static GColor calendar_color(uint8_t color_id) {
+    switch (color_id) {
+        case 1: return PBL_IF_COLOR_ELSE(GColorGreen, GColorWhite);
+        case 2: return PBL_IF_COLOR_ELSE(GColorBlue, GColorWhite);
+        case 3: return PBL_IF_COLOR_ELSE(GColorRed, GColorWhite);
+        case 4: return PBL_IF_COLOR_ELSE(GColorYellow, GColorWhite);
+        case 5: return PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite);
+        case 6: return PBL_IF_COLOR_ELSE(GColorMagenta, GColorWhite);
+        case 7: return PBL_IF_COLOR_ELSE(GColorOrange, GColorWhite);
+        case 8: return PBL_IF_COLOR_ELSE(GColorPurple, GColorWhite);
+        default: return GColorWhite;
     }
 }
 
@@ -466,6 +494,50 @@ static void on_weather_day_graph_layer_update(Layer* layer, GContext* ctx) {
     plot_draw_frame(ctx, &plot, GColorWhite);
 }
 
+static void on_calendar_layer_update(Layer* layer, GContext* ctx) {
+    GRect bounds = layer_get_bounds(layer);
+    int16_t y = 0;
+    uint8_t row_index = 0;
+    const char* cursor = g_calendar_string;
+    GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_14);
+
+    graphics_context_set_text_color(ctx, GColorWhite);
+    while (*cursor && row_index < CALENDAR_ENTRY_COUNT &&
+           y + CALENDAR_ROW_HEIGHT <= bounds.size.h) {
+        char row[CALENDAR_TEXT_LENGTH];
+        uint16_t line_len = 0;
+        uint16_t copy_len = 0;
+
+        while (cursor[line_len] && cursor[line_len] != '\n') {
+            if (copy_len < sizeof(row) - 1) {
+                row[copy_len++] = cursor[line_len];
+            }
+            line_len++;
+        }
+        row[copy_len] = '\0';
+
+        if (copy_len > 0) {
+            graphics_context_set_fill_color(ctx,
+                                            calendar_color(g_calendar_color_array[row_index]));
+            graphics_fill_rect(ctx, GRect(2, y + 2, CALENDAR_BAR_WIDTH,
+                                          CALENDAR_ROW_HEIGHT - 4),
+                               0, GCornerNone);
+            graphics_context_set_text_color(ctx, GColorWhite);
+            graphics_draw_text(ctx, row, font,
+                               GRect(2 + CALENDAR_BAR_WIDTH + 2, y,
+                                     bounds.size.w - CALENDAR_BAR_WIDTH - 6,
+                                     CALENDAR_ROW_HEIGHT),
+                               GTextOverflowModeTrailingEllipsis,
+                               GTextAlignmentLeft, NULL);
+        }
+
+        cursor += line_len;
+        if (*cursor == '\n') { cursor++; }
+        y += CALENDAR_ROW_HEIGHT;
+        row_index++;
+    }
+}
+
 // --------------------------------------------------------------------------
 // System event handlers.
 // --------------------------------------------------------------------------
@@ -605,9 +677,26 @@ static void on_sync_tuple_change(const uint32_t key, const Tuple* new_tuple, con
             }
             break;
         case REPORT_KEY:
-            strncpy(g_report_string, new_tuple->value->cstring, min(sizeof(g_report_string), new_tuple->length));
+            strncpy(g_report_string, new_tuple->value->cstring, sizeof(g_report_string) - 1);
+            g_report_string[sizeof(g_report_string) - 1] = '\0';
             text_layer_set_text(g_report_layer, g_report_string);
             break;
+        case CALENDAR_KEY:
+            strncpy(g_calendar_string, new_tuple->value->cstring, sizeof(g_calendar_string) - 1);
+            g_calendar_string[sizeof(g_calendar_string) - 1] = '\0';
+            layer_mark_dirty(g_calendar_layer);
+            break;
+        case CALENDAR_COLORS_KEY: {
+            for (int i=0; i<CALENDAR_ENTRY_COUNT; i++) {
+                g_calendar_color_array[i] = 0;
+            }
+            int copy_len = min(new_tuple->length, sizeof(g_calendar_color_array));
+            if (copy_len > 0) {
+                memcpy(g_calendar_color_array, new_tuple->value->data, copy_len);
+            }
+            layer_mark_dirty(g_calendar_layer);
+            break;
+        }
         case WEATHER_DAY_ATEMP_ARRAY_KEY: {
             for (int i=0; i<WEATHER_DAY_GRAPH_SAMPLES; i++) {
                 g_weather_day_atemp_array[i] = WEATHER_DAY_GRAPH_UNKNOWN;
@@ -675,12 +764,22 @@ static void init() {
     text_layer_set_font(g_date_layer, fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD));
     text_layer_set_text_alignment(g_date_layer, GTextAlignmentRight);
 
-    g_report_layer = text_layer_create(GRect(1, 17, bounds.size.w-2, 3*14));
+    g_report_layer = text_layer_create(GRect(1, REPORT_DATA_Y,
+                                             bounds.size.w/2-2,
+                                             REPORT_DATA_HEIGHT));
     layer_add_child(window_layer, text_layer_get_layer(g_report_layer));
     text_layer_set_background_color(g_report_layer, GColorBlack);
     text_layer_set_text_color(g_report_layer, GColorWhite);
     text_layer_set_font(g_report_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
     text_layer_set_text_alignment(g_report_layer, GTextAlignmentLeft);
+    text_layer_set_overflow_mode(g_report_layer, GTextOverflowModeWordWrap);
+
+    g_calendar_layer = layer_create(GRect(bounds.size.w/2+1,
+                                          CALENDAR_DATA_Y,
+                                          bounds.size.w/2-2,
+                                          CALENDAR_DATA_HEIGHT));
+    layer_set_update_proc(g_calendar_layer, &on_calendar_layer_update);
+    layer_add_child(window_layer, g_calendar_layer);
     
     g_battery_layer = layer_create(GRect(1, 1, 10, 17));
     layer_set_update_proc(g_battery_layer, &on_battery_layer_update);
@@ -781,17 +880,6 @@ static void init() {
     text_layer_set_text_color(g_health_cals_text_layer, GColorWhite);
     text_layer_set_font(g_health_cals_text_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
 
-    
-    // Message    
-    g_my_message_layer = text_layer_create(GRect(37, 0, bounds.size.w-37, 14));
-    layer_add_child(window_layer, text_layer_get_layer(g_my_message_layer));
-    text_layer_set_background_color(g_my_message_layer, GColorBlack);
-    text_layer_set_text_color(g_my_message_layer, GColorWhite);
-    text_layer_set_font(g_my_message_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
-    text_layer_set_text_alignment(g_my_message_layer, GTextAlignmentRight);
-    text_layer_set_text(g_my_message_layer, "This is not normal!");
-
-    
     time_t now = time(NULL);
     g_local_time = *localtime(&now);
     on_tick_timer(&g_local_time, MINUTE_UNIT);
@@ -830,7 +918,9 @@ static void init() {
         TupletBytes(WEATHER_DAY_PRECIP_ARRAY_KEY, g_weather_day_precip_array, sizeof(g_weather_day_precip_array)),
         TupletInteger(WEATHER_UV_INDEX_KEY, (uint8_t)WEATHER_DETAIL_UNKNOWN),
         TupletInteger(WEATHER_CLOUD_COVER_KEY, (uint8_t)WEATHER_PERCENT_UNKNOWN),
-        TupletInteger(WEATHER_VISIBILITY_KEY, (uint8_t)WEATHER_DETAIL_UNKNOWN)
+        TupletInteger(WEATHER_VISIBILITY_KEY, (uint8_t)WEATHER_DETAIL_UNKNOWN),
+        TupletCString(CALENDAR_KEY, ""),
+        TupletBytes(CALENDAR_COLORS_KEY, g_calendar_color_array, sizeof(g_calendar_color_array))
     };
 
     app_sync_init(&g_sync, g_sync_buffer, sizeof(g_sync_buffer),
@@ -863,7 +953,8 @@ static void deinit() {
     text_layer_destroy(g_health_sleep_text_layer);
     layer_destroy(g_health_bpm_heart_layer);
     text_layer_destroy(g_health_bpm_text_layer);
-    text_layer_destroy(g_my_message_layer);
+    text_layer_destroy(g_report_layer);
+    layer_destroy(g_calendar_layer);
     window_destroy(g_window);
     app_sync_deinit(&g_sync);
 }
