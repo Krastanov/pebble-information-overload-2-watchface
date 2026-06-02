@@ -48,6 +48,11 @@ function roundValue(value, fallback) {
   return isFiniteNumber(value) ? Math.round(value) : fallback;
 }
 
+function roundBoundedValue(value, fallback, minValue, maxValue) {
+  if (!isFiniteNumber(value)) {return fallback;}
+  return Math.max(minValue, Math.min(maxValue, Math.round(value)));
+}
+
 function roundTemperature(value) {
   return roundValue(value, WEATHER_TEMP_UNKNOWN);
 }
@@ -230,6 +235,9 @@ function sendWeather() {
                 put(4, roundTemperature(current.temp));                // Celsius
                 put(9, roundValue(current.humidity, 101));            // Percents
                 put(10, roundValue(current.wind_speed*10, 1001));     // dm/s
+                put(14, roundBoundedValue(current.uvi, 255, 0, 254)); // UV index
+                put(15, roundBoundedValue(current.clouds, 101, 0, 100)); // Percents
+                put(16, roundBoundedValue(current.visibility/1000, 255, 0, 254)); // Kilometers
               }
               finishRequest();
             });

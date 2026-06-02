@@ -28,7 +28,10 @@
             "WEATHER_WIND_SPEED_KEY",
             "REPORT_KEY",
             "WEATHER_DAY_ATEMP_ARRAY_KEY",
-            "WEATHER_DAY_PRECIP_ARRAY_KEY"
+            "WEATHER_DAY_PRECIP_ARRAY_KEY",
+            "WEATHER_UV_INDEX_KEY",
+            "WEATHER_CLOUD_COVER_KEY",
+            "WEATHER_VISIBILITY_KEY"
         ],
         "projectType": "native",
         "resources": {

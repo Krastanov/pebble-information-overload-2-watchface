@@ -10,6 +10,10 @@
 #define WEATHER_DAY_GRAPH_UNKNOWN 255
 #define WEATHER_TEMP_UNKNOWN ((int8_t)-128)
 #define WEATHER_TEMP_LEGACY_UNKNOWN ((int8_t)101)
+#define WEATHER_DETAIL_UNKNOWN 255
+#define WEATHER_PERCENT_UNKNOWN 101
+#define WEATHER_PRECIP_GRAPH_WIDTH 49
+#define WEATHER_PRECIP_GRAPH_INNER_WIDTH (WEATHER_PRECIP_GRAPH_WIDTH - 4)
 
 // TODO Add `const` where appropriate!
 // TODO not all memory is released?
@@ -42,6 +46,7 @@ static Layer* g_weather_temp_layer;           // Layer updated on weather events
 static Layer* g_weather_icon_layer;           // Layer updated on weather events from PebbleKit messages.
 static Layer* g_weather_precipprob_layer;     // Layer updated on weather events from PebbleKit messages.
 static Layer* g_weather_precipgraph_layer;    // Layer updated on weather events from PebbleKit messages or on minute ticks.
+static Layer* g_weather_detail_layer;         // Layer updated on weather events from PebbleKit messages or on minute ticks.
 static Layer* g_weather_day_graph_layer;      // Layer updated on weather events from PebbleKit messages or on minute ticks.
 static TextLayer* g_weather_humidity_layer;   // Layer updated on weather events from PebbleKit messages.
 static TextLayer* g_weather_wind_layer;       // Layer updated on weather events from PebbleKit messages.
@@ -63,6 +68,10 @@ static uint8_t g_ticks_since_weather_array_update;
 static uint8_t g_weather_day_atemp_array[WEATHER_DAY_GRAPH_SAMPLES];
 static uint8_t g_weather_day_precip_array[WEATHER_DAY_GRAPH_SAMPLES];
 static uint16_t g_ticks_since_weather_day_graph_update;
+static uint8_t g_weather_uv_index = WEATHER_DETAIL_UNKNOWN;
+static uint8_t g_weather_cloud_cover = WEATHER_PERCENT_UNKNOWN;
+static uint8_t g_weather_visibility_km = WEATHER_DETAIL_UNKNOWN;
+static bool g_show_short_precipgraph;
 static char g_report_string[100];
 static AppSync g_sync;
 static uint8_t g_sync_buffer[MESSAGE_BUF];
@@ -81,7 +90,10 @@ enum CommKey {
   WEATHER_WIND_SPEED_KEY = 0xA,
   REPORT_KEY = 0xB,
   WEATHER_DAY_ATEMP_ARRAY_KEY = 0xC,
-  WEATHER_DAY_PRECIP_ARRAY_KEY = 0xD
+  WEATHER_DAY_PRECIP_ARRAY_KEY = 0xD,
+  WEATHER_UV_INDEX_KEY = 0xE,
+  WEATHER_CLOUD_COVER_KEY = 0xF,
+  WEATHER_VISIBILITY_KEY = 0x10
 };
 
 static GColor weather_icon_color(uint8_t weather_icon) {
@@ -117,6 +129,27 @@ static void draw_weather_temp(GContext* ctx, int8_t temp, GColor color,
     graphics_draw_text(ctx, temp_string,
                        fonts_get_system_font(FONT_KEY_GOTHIC_14),
                        rect, GTextOverflowModeWordWrap, alignment, NULL);
+}
+
+static bool weather_precipgraph_has_visible_values(void) {
+    uint16_t start = g_ticks_since_weather_array_update;
+    uint16_t count = sizeof(g_weather_precip_array);
+    if (start >= count) { return false; }
+
+    uint16_t end = start + WEATHER_PRECIP_GRAPH_INNER_WIDTH;
+    if (end > count) { end = count; }
+    for (uint16_t i=start; i<end; i++) {
+        if (g_weather_precip_array[i] != 0) { return true; }
+    }
+    return false;
+}
+
+static bool weather_short_precip_has_visible_data(void) {
+    return g_precipprob > 0 || weather_precipgraph_has_visible_values();
+}
+
+static bool weather_short_precip_visible(void) {
+    return g_show_short_precipgraph && weather_short_precip_has_visible_data();
 }
 
 static uint8_t palette_size_for_format(GBitmapFormat format) {
@@ -285,7 +318,7 @@ static void on_weather_icon_layer_update(Layer* layer, GContext* ctx) {
 static void on_weather_precipprob_layer_update(Layer* layer, GContext* ctx) { // TODO make text layer with wrapping.
     GRect bounds = layer_get_bounds(layer);
     char percent_string[4];
-    if (g_precipprob > 0) {
+    if (g_show_short_precipgraph && g_precipprob > 0) {
         snprintf(percent_string, sizeof percent_string, "%d", g_precipprob);
         graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite));
         graphics_draw_text(ctx, percent_string,
@@ -298,6 +331,8 @@ static void on_weather_precipprob_layer_update(Layer* layer, GContext* ctx) { //
 }
 
 static void on_weather_precipgraph_layer_update(Layer* layer, GContext* ctx) {
+    if (!g_show_short_precipgraph) { return; }
+
     static const int16_t grid_lines[] = {15, 30};
     PlotLayout plot = plot_layout(layer_get_bounds(layer), 2, 1, 2, 1, 0, 240);
 
@@ -318,6 +353,69 @@ static void on_weather_precipgraph_layer_update(Layer* layer, GContext* ctx) {
             g_ticks_since_weather_array_update);
         plot_fill_tail(ctx, &plot, first_missing, plot.area.size.w, 2,
                        GColorDarkGray);
+    }
+}
+
+static GColor weather_uv_color(uint8_t uv_index) {
+    if (uv_index >= 7) { return PBL_IF_COLOR_ELSE(GColorRed, GColorWhite); }
+    if (uv_index >= 3) { return PBL_IF_COLOR_ELSE(GColorYellow, GColorWhite); }
+    return GColorWhite;
+}
+
+static GColor weather_visibility_color(uint8_t visibility_km) {
+    if (visibility_km < 5) { return PBL_IF_COLOR_ELSE(GColorRed, GColorWhite); }
+    if (visibility_km < 9) { return PBL_IF_COLOR_ELSE(GColorYellow, GColorWhite); }
+    return GColorWhite;
+}
+
+static void draw_weather_detail(GContext* ctx, const char* value,
+                                const char* label, GRect rect,
+                                GColor color) {
+    graphics_context_set_text_color(ctx, color);
+    graphics_draw_text(ctx, value,
+                       fonts_get_system_font(FONT_KEY_GOTHIC_14),
+                       GRect(rect.origin.x, 2, rect.size.w, 15),
+                       GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
+    graphics_draw_text(ctx, label,
+                       fonts_get_system_font(FONT_KEY_GOTHIC_14),
+                       GRect(rect.origin.x, 13, rect.size.w, 15),
+                       GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
+}
+
+static GRect weather_detail_cell(GRect bounds, uint8_t index) {
+    int cell_width = bounds.size.w/3;
+    int extra = bounds.size.w - cell_width*3;
+    int x = 0;
+    for (uint8_t i=0; i<index; i++) {
+        x += cell_width + (i < extra ? 1 : 0);
+    }
+    return GRect(x, 0, cell_width + (index < extra ? 1 : 0), bounds.size.h);
+}
+
+static void on_weather_detail_layer_update(Layer* layer, GContext* ctx) {
+    GRect bounds = layer_get_bounds(layer);
+    if (weather_short_precip_visible()) { return; }
+
+    char value_string[5];
+
+    if (g_weather_uv_index != WEATHER_DETAIL_UNKNOWN) {
+        snprintf(value_string, sizeof value_string, "%d", g_weather_uv_index);
+        draw_weather_detail(ctx, value_string, "UV",
+                            weather_detail_cell(bounds, 0),
+                            weather_uv_color(g_weather_uv_index));
+    }
+
+    if (g_weather_cloud_cover < WEATHER_PERCENT_UNKNOWN) {
+        snprintf(value_string, sizeof value_string, "%d", g_weather_cloud_cover);
+        draw_weather_detail(ctx, value_string, "%",
+                            weather_detail_cell(bounds, 1), GColorWhite);
+    }
+
+    if (g_weather_visibility_km != WEATHER_DETAIL_UNKNOWN) {
+        snprintf(value_string, sizeof value_string, "%d", g_weather_visibility_km);
+        draw_weather_detail(ctx, value_string, "km",
+                            weather_detail_cell(bounds, 2),
+                            weather_visibility_color(g_weather_visibility_km));
     }
 }
 
@@ -384,6 +482,7 @@ static void on_tick_timer(struct tm* tick_time, TimeUnits units_changed) {
     text_layer_set_text(g_date_layer, date_string);
     layer_mark_dirty(g_health_bpm_graph_layer);
     layer_mark_dirty(g_weather_precipgraph_layer);
+    layer_mark_dirty(g_weather_detail_layer);
     layer_mark_dirty(g_weather_day_graph_layer);
 }
 
@@ -478,6 +577,7 @@ static void on_sync_tuple_change(const uint32_t key, const Tuple* new_tuple, con
         case WEATHER_PRECIP_PROB_KEY:
             g_precipprob = new_tuple->value->uint8;
             layer_mark_dirty(g_weather_precipprob_layer);
+            layer_mark_dirty(g_weather_detail_layer);
             break;
         case WEATHER_PRECIP_ARRAY_KEY: {
             for (int i=0; i<(int)sizeof(g_weather_precip_array); i++) {
@@ -489,6 +589,7 @@ static void on_sync_tuple_change(const uint32_t key, const Tuple* new_tuple, con
             }
             g_ticks_since_weather_array_update = 0;
             layer_mark_dirty(g_weather_precipgraph_layer);
+            layer_mark_dirty(g_weather_detail_layer);
             break;
         }
         case WEATHER_HUMIDITY_KEY:
@@ -531,6 +632,18 @@ static void on_sync_tuple_change(const uint32_t key, const Tuple* new_tuple, con
             layer_mark_dirty(g_weather_day_graph_layer);
             break;
         }
+        case WEATHER_UV_INDEX_KEY:
+            g_weather_uv_index = new_tuple->value->uint8;
+            layer_mark_dirty(g_weather_detail_layer);
+            break;
+        case WEATHER_CLOUD_COVER_KEY:
+            g_weather_cloud_cover = new_tuple->value->uint8;
+            layer_mark_dirty(g_weather_detail_layer);
+            break;
+        case WEATHER_VISIBILITY_KEY:
+            g_weather_visibility_km = new_tuple->value->uint8;
+            layer_mark_dirty(g_weather_detail_layer);
+            break;
         default:
             break;
     }
@@ -598,21 +711,28 @@ static void init() {
 
     int weather_precipprob_width = 16;
     GRect weather_precipgraph_frame = GRect(bounds.size.w-50, bounds.size.h-27, 49, 27);
-    bool show_short_precipgraph =
+    g_show_short_precipgraph =
         weather_day_graph_frame.origin.x+weather_day_graph_frame.size.w+1+
         weather_precipprob_width+1+weather_precipgraph_frame.size.w <= bounds.size.w;
     int weather_precipprob_x = weather_precipgraph_frame.origin.x-weather_precipprob_width-1;
     g_weather_precipprob_layer = layer_create(GRect(weather_precipprob_x, bounds.size.h-30, weather_precipprob_width, 30));
     layer_set_update_proc(g_weather_precipprob_layer, &on_weather_precipprob_layer_update);
-    if (show_short_precipgraph) {
+    if (g_show_short_precipgraph) {
         layer_add_child(window_layer, g_weather_precipprob_layer);
     }
     
     g_weather_precipgraph_layer = layer_create(weather_precipgraph_frame);
     layer_set_update_proc(g_weather_precipgraph_layer, &on_weather_precipgraph_layer_update);
-    if (show_short_precipgraph) {
+    if (g_show_short_precipgraph) {
         layer_add_child(window_layer, g_weather_precipgraph_layer);
     }
+
+    GRect weather_detail_frame = GRect(weather_precipprob_x, bounds.size.h-30,
+                                       weather_precipprob_width+1+weather_precipgraph_frame.size.w,
+                                       30);
+    g_weather_detail_layer = layer_create(weather_detail_frame);
+    layer_set_update_proc(g_weather_detail_layer, &on_weather_detail_layer_update);
+    layer_add_child(window_layer, g_weather_detail_layer);
 
     g_weather_humidity_layer = text_layer_create(GRect(1, bounds.size.h-42, 30, 14));
     layer_add_child(window_layer, text_layer_get_layer(g_weather_humidity_layer));
@@ -707,7 +827,10 @@ static void init() {
         TupletInteger(WEATHER_WIND_SPEED_KEY, (uint16_t)1001),
         TupletCString(REPORT_KEY, ""),
         TupletBytes(WEATHER_DAY_ATEMP_ARRAY_KEY, g_weather_day_atemp_array, sizeof(g_weather_day_atemp_array)),
-        TupletBytes(WEATHER_DAY_PRECIP_ARRAY_KEY, g_weather_day_precip_array, sizeof(g_weather_day_precip_array))
+        TupletBytes(WEATHER_DAY_PRECIP_ARRAY_KEY, g_weather_day_precip_array, sizeof(g_weather_day_precip_array)),
+        TupletInteger(WEATHER_UV_INDEX_KEY, (uint8_t)WEATHER_DETAIL_UNKNOWN),
+        TupletInteger(WEATHER_CLOUD_COVER_KEY, (uint8_t)WEATHER_PERCENT_UNKNOWN),
+        TupletInteger(WEATHER_VISIBILITY_KEY, (uint8_t)WEATHER_DETAIL_UNKNOWN)
     };
 
     app_sync_init(&g_sync, g_sync_buffer, sizeof(g_sync_buffer),
@@ -731,6 +854,7 @@ static void deinit() {
     layer_destroy(g_weather_icon_layer);
     layer_destroy(g_weather_precipprob_layer);
     layer_destroy(g_weather_precipgraph_layer);
+    layer_destroy(g_weather_detail_layer);
     layer_destroy(g_weather_day_graph_layer);
     text_layer_destroy(g_weather_humidity_layer);
     text_layer_destroy(g_weather_wind_layer);
