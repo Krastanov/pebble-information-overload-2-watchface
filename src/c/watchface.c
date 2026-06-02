@@ -2,6 +2,7 @@
 #include <pebble-fctx/fctx.h>
 #include <pebble-fctx/fpath.h>
 #include <pebble-fctx/ffont.h>
+#include "plot.h"
 
 // message buffer size:
 #define MESSAGE_BUF 768
@@ -180,30 +181,30 @@ static void on_connection_layer_update(Layer* layer, GContext* ctx) {
 
 static void on_health_bpm_graph_layer_update(Layer* layer, GContext* ctx) {
     HealthMinuteData minute_data[60];
+    int16_t bpm_values[30];
+    int16_t last_bpm = 50;
     time_t t2 = time(NULL);
     time_t t1 = t2 - SECONDS_PER_HOUR;
     // TODO Why not health_service_get_minute_history(minute_data, sizeof(minute_data), &t1, &t2));
     health_service_get_minute_history(&minute_data[0], 60, &t1, &t2);
-    graphics_context_set_fill_color(ctx, GColorDarkGray);
-    graphics_fill_rect(ctx, GRect(1, 11, 33, 1), 0, GCornerNone);
-    graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorRed, GColorWhite));
-    int last_y = 20;
+
     for (int i=0; i<60; i++) {
-        int y;
-        if (minute_data[i].is_invalid || minute_data[i].heart_rate_bpm == 0) {
-            y = last_y;
-        } else {
-            y = min(20, max(1, 20-(minute_data[i].heart_rate_bpm-50)*20/100));
-            last_y = y;
+        if (!minute_data[i].is_invalid && minute_data[i].heart_rate_bpm != 0) {
+            last_bpm = minute_data[i].heart_rate_bpm;
         }
-        if (i>=30) { // We are plotting the last 30 minutes, but reading the last 60 minutes is a cheap way ensure we are not starting with a bad datapoint.
-            graphics_draw_line(ctx, GPoint(i+2-30, y), GPoint(i+2-30, 20));
+        // Read 60 minutes so the plotted 30-minute window can start from the
+        // most recent valid point before it.
+        if (i >= 30) {
+            bpm_values[i-30] = last_bpm;
         }
     }
-    graphics_context_set_stroke_color(ctx, GColorWhite);
-    graphics_draw_rect(ctx, GRect(0,0,34,22));
-    graphics_context_set_fill_color(ctx, GColorDarkGray);
-    graphics_fill_rect(ctx, GRect(16, 1, 1, 20), 0, GCornerNone);
+
+    PlotLayout plot = plot_layout(layer_get_bounds(layer), 2, 1, 2, 1, 50, 145);
+    plot_draw_horizontal_line(ctx, &plot, 95, GColorDarkGray, 0, 0);
+    plot_draw_filled_line(ctx, &plot, bpm_values, ARRAY_LENGTH(bpm_values),
+                          PBL_IF_COLOR_ELSE(GColorRed, GColorWhite));
+    plot_draw_frame(ctx, &plot, GColorWhite);
+    plot_draw_vertical_line(ctx, &plot, 14, GColorDarkGray, 0, 0);
 }
 
 static void on_health_bpm_heart_layer_update(Layer* layer, GContext* ctx) {
@@ -296,133 +297,74 @@ static void on_weather_precipprob_layer_update(Layer* layer, GContext* ctx) { //
 }
 
 static void on_weather_precipgraph_layer_update(Layer* layer, GContext* ctx) {
-    graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite));
-    int count = 0;
-    int i;
-    for (i=0; i<45; i++) {
-        int i_off = g_ticks_since_weather_array_update+i;      
-        if (i_off < 60) {
-            if (g_weather_precip_array[i_off] > 0) {
-                count += 1;
-                graphics_draw_line(ctx, GPoint(i+2, 25-g_weather_precip_array[i_off]/10), GPoint(i+2, 25));
-            }
-        } else {
-            break;
-        }
-    }
-    if (count > 0) {
-        graphics_context_set_stroke_color(ctx, GColorWhite);
-        graphics_draw_rect(ctx, GRect(0,0,49,27));
-        graphics_context_set_fill_color(ctx, GColorDarkGray);
-        graphics_fill_rect(ctx, GRect(17, 1, 1, 25), 0, GCornerNone);
-        graphics_fill_rect(ctx, GRect(32, 1, 1, 25), 0, GCornerNone);
-        if (g_ticks_since_weather_array_update>15) {
-            graphics_fill_rect(ctx, GRect(i+1, 23, 46-i, 2), 0, GCornerNone);
-        }
-    }
-}
+    static const int16_t grid_lines[] = {15, 30};
+    PlotLayout plot = plot_layout(layer_get_bounds(layer), 2, 1, 2, 1, 0, 240);
 
-static bool weather_day_graph_has_data(uint8_t* values) {
-    uint8_t half_hour_offset = min(WEATHER_DAY_GRAPH_SAMPLES,
-                                   g_ticks_since_weather_day_graph_update/30);
-    for (int i=0; i<WEATHER_DAY_GRAPH_SAMPLES-half_hour_offset; i++) {
-        if (values[i+half_hour_offset] != WEATHER_DAY_GRAPH_UNKNOWN) {
-            return true;
-        }
+    uint16_t drawn = plot_draw_u8_filled_line(
+        ctx, &plot, g_weather_precip_array, sizeof(g_weather_precip_array),
+        g_ticks_since_weather_array_update, 0, 0, true,
+        PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite));
+    if (drawn == 0) {
+        return;
     }
-    return false;
+
+    plot_draw_frame(ctx, &plot, GColorWhite);
+    plot_draw_vertical_lines(ctx, &plot, grid_lines, ARRAY_LENGTH(grid_lines),
+                             GColorDarkGray, 0, 0);
+    if (g_ticks_since_weather_array_update > 15) {
+        uint16_t first_missing = plot_visible_u8_count(
+            &plot, sizeof(g_weather_precip_array),
+            g_ticks_since_weather_array_update);
+        plot_fill_tail(ctx, &plot, first_missing, plot.area.size.w, 2,
+                       GColorDarkGray);
+    }
 }
 
 static void on_weather_day_graph_layer_update(Layer* layer, GContext* ctx) {
-    GRect bounds = layer_get_bounds(layer);
-    int graph_left = 1;
-    int graph_top = 1;
-    int graph_width = min(WEATHER_DAY_GRAPH_SAMPLES, bounds.size.w-2);
-    int graph_height = bounds.size.h-2;
-    int graph_bottom = graph_top+graph_height-1;
+    static const int16_t grid_lines[] = {12, 24, 36};
+    PlotLayout plot = plot_layout(layer_get_bounds(layer), 1, 1, 1, 1, 0, 100);
     uint8_t half_hour_offset = min(WEATHER_DAY_GRAPH_SAMPLES,
                                    g_ticks_since_weather_day_graph_update/30);
-    bool has_temp = weather_day_graph_has_data(g_weather_day_atemp_array);
-    bool has_precip = weather_day_graph_has_data(g_weather_day_precip_array);
+    bool has_temp = plot_has_u8_values(&plot, g_weather_day_atemp_array,
+                                       WEATHER_DAY_GRAPH_SAMPLES,
+                                       half_hour_offset,
+                                       WEATHER_DAY_GRAPH_UNKNOWN);
+    bool has_precip = plot_has_u8_values(&plot, g_weather_day_precip_array,
+                                         WEATHER_DAY_GRAPH_SAMPLES,
+                                         half_hour_offset,
+                                         WEATHER_DAY_GRAPH_UNKNOWN);
 
     if (!has_temp && !has_precip) {
         return;
     }
 
-    graphics_context_set_stroke_color(ctx, GColorWhite);
-    graphics_draw_rect(ctx, GRect(0, 0, bounds.size.w, bounds.size.h));
-    graphics_context_set_fill_color(ctx, GColorDarkGray);
-    graphics_fill_rect(ctx, GRect(graph_left+12, graph_top, 1, graph_height), 0, GCornerNone);
-    graphics_fill_rect(ctx, GRect(graph_left+24, graph_top, 1, graph_height), 0, GCornerNone);
-    graphics_fill_rect(ctx, GRect(graph_left+36, graph_top, 1, graph_height), 0, GCornerNone);
+    plot_draw_frame(ctx, &plot, GColorWhite);
+    plot_draw_vertical_lines(ctx, &plot, grid_lines, ARRAY_LENGTH(grid_lines),
+                             GColorDarkGray, 0, 0);
 
     if (has_precip) {
-        graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite));
-        for (int i=0; i<graph_width; i++) {
-            int sample_i = i+half_hour_offset;
-            if (sample_i >= WEATHER_DAY_GRAPH_SAMPLES) {break;}
-            if (g_weather_day_precip_array[sample_i] == WEATHER_DAY_GRAPH_UNKNOWN) {
-                continue;
-            }
-            int precip = min(g_weather_day_precip_array[sample_i], 100);
-            int fill_height = (precip*graph_height+99)/100;
-            if (fill_height > 0) {
-                graphics_fill_rect(ctx,
-                                   GRect(graph_left+i,
-                                         graph_bottom-fill_height+1,
-                                         1,
-                                         fill_height),
-                                   0,
-                                   GCornerNone);
-            }
-        }
-        graphics_context_set_fill_color(ctx, GColorDarkGray);
-        graphics_fill_rect(ctx, GRect(graph_left+12, graph_top, 1, graph_height), 0, GCornerNone);
-        graphics_fill_rect(ctx, GRect(graph_left+24, graph_top, 1, graph_height), 0, GCornerNone);
-        graphics_fill_rect(ctx, GRect(graph_left+36, graph_top, 1, graph_height), 0, GCornerNone);
+        plot_set_y_range(&plot, 0, 100);
+        plot_draw_u8_filled_line(ctx, &plot, g_weather_day_precip_array,
+                                 WEATHER_DAY_GRAPH_SAMPLES, half_hour_offset,
+                                 WEATHER_DAY_GRAPH_UNKNOWN, 0, true,
+                                 PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite));
+        plot_draw_vertical_lines(ctx, &plot, grid_lines, ARRAY_LENGTH(grid_lines),
+                                 GColorDarkGray, 0, 0);
     }
 
     if (has_temp) {
-        int temp_min = 127;
-        int temp_max = -127;
-        for (int i=0; i<WEATHER_DAY_GRAPH_SAMPLES-half_hour_offset; i++) {
-            uint8_t encoded_temp = g_weather_day_atemp_array[i+half_hour_offset];
-            if (encoded_temp == WEATHER_DAY_GRAPH_UNKNOWN) {continue;}
-            int temp = (int)encoded_temp-100;
-            temp_min = min(temp_min, temp);
-            temp_max = max(temp_max, temp);
-        }
-        if (temp_min == temp_max) {
-            temp_min -= 1;
-            temp_max += 1;
-        }
-
-        int last_x = -1;
-        int last_y = 0;
-        graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorRed, GColorWhite));
-        for (int i=0; i<graph_width; i++) {
-            int sample_i = i+half_hour_offset;
-            if (sample_i >= WEATHER_DAY_GRAPH_SAMPLES) {break;}
-            uint8_t encoded_temp = g_weather_day_atemp_array[sample_i];
-            if (encoded_temp == WEATHER_DAY_GRAPH_UNKNOWN) {
-                last_x = -1;
-                continue;
-            }
-            int temp = (int)encoded_temp-100;
-            int x = graph_left+i;
-            int y = graph_bottom-((temp-temp_min)*(graph_height-1))/(temp_max-temp_min);
-            if (last_x >= 0) {
-                graphics_draw_line(ctx, GPoint(last_x, last_y), GPoint(x, y));
-            } else {
-                graphics_draw_line(ctx, GPoint(x, y), GPoint(x, y));
-            }
-            last_x = x;
-            last_y = y;
-        }
+        plot_set_y_range_from_u8(&plot, g_weather_day_atemp_array,
+                                 WEATHER_DAY_GRAPH_SAMPLES,
+                                 half_hour_offset,
+                                 WEATHER_DAY_GRAPH_UNKNOWN,
+                                 -100);
+        plot_draw_u8_line(ctx, &plot, g_weather_day_atemp_array,
+                          WEATHER_DAY_GRAPH_SAMPLES, half_hour_offset,
+                          WEATHER_DAY_GRAPH_UNKNOWN, -100,
+                          PBL_IF_COLOR_ELSE(GColorRed, GColorWhite));
     }
 
-    graphics_context_set_stroke_color(ctx, GColorWhite);
-    graphics_draw_rect(ctx, GRect(0, 0, bounds.size.w, bounds.size.h));
+    plot_draw_frame(ctx, &plot, GColorWhite);
 }
 
 // --------------------------------------------------------------------------
