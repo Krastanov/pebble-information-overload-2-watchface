@@ -8,6 +8,8 @@
 #define MESSAGE_BUF 768
 #define WEATHER_DAY_GRAPH_SAMPLES 48
 #define WEATHER_DAY_GRAPH_UNKNOWN 255
+#define WEATHER_TEMP_UNKNOWN ((int8_t)-128)
+#define WEATHER_TEMP_LEGACY_UNKNOWN ((int8_t)101)
 
 // TODO Add `const` where appropriate!
 // TODO not all memory is released?
@@ -48,12 +50,12 @@ static TextLayer* g_report_layer;             // General purpose report layer - 
 static struct tm g_local_time;
 static uint8_t g_battery_level;
 static int8_t g_connected; // TODO Should be bool!
-static int8_t g_atemp = 101; // TODO Use some more meaningful way to specify "unknown", not just setting it to 101!
-static int8_t g_atempmax = 101;
-static int8_t g_atempmin = 101;
-static int8_t g_temp = 101;
-static int8_t g_tempmax = 101;
-static int8_t g_tempmin = 101;
+static int8_t g_atemp = WEATHER_TEMP_UNKNOWN;
+static int8_t g_atempmax = WEATHER_TEMP_UNKNOWN;
+static int8_t g_atempmin = WEATHER_TEMP_UNKNOWN;
+static int8_t g_temp = WEATHER_TEMP_UNKNOWN;
+static int8_t g_tempmax = WEATHER_TEMP_UNKNOWN;
+static int8_t g_tempmin = WEATHER_TEMP_UNKNOWN;
 static uint8_t g_precipprob;
 static uint8_t g_weather_icon; // TODO Use less obfuscated data type!
 static uint8_t g_weather_precip_array[60];
@@ -99,6 +101,22 @@ static GColor weather_icon_color(uint8_t weather_icon) {
         default:
             return GColorWhite;
     }
+}
+
+static bool weather_temp_is_known(int8_t temp) {
+    return temp != WEATHER_TEMP_UNKNOWN && temp != WEATHER_TEMP_LEGACY_UNKNOWN;
+}
+
+static void draw_weather_temp(GContext* ctx, int8_t temp, GColor color,
+                              GRect rect, GTextAlignment alignment) {
+    if (!weather_temp_is_known(temp)) {return;}
+
+    char temp_string[5];
+    snprintf(temp_string, sizeof temp_string, "%d", temp);
+    graphics_context_set_text_color(ctx, color);
+    graphics_draw_text(ctx, temp_string,
+                       fonts_get_system_font(FONT_KEY_GOTHIC_14),
+                       rect, GTextOverflowModeWordWrap, alignment, NULL);
 }
 
 static uint8_t palette_size_for_format(GBitmapFormat format) {
@@ -219,39 +237,22 @@ static void on_health_bpm_heart_layer_update(Layer* layer, GContext* ctx) {
 }
 
 static void on_weather_temp_layer_update(Layer* layer, GContext* ctx) {
-    char temp_string[4];
-    if (g_temp < 101) {
-        snprintf(temp_string, sizeof temp_string, "%d", g_temp);
-        graphics_context_set_text_color(ctx, GColorWhite);
-        graphics_draw_text(ctx, temp_string,
-                           fonts_get_system_font(FONT_KEY_GOTHIC_14),
-                           GRect(0,7,18,15), GTextOverflowModeWordWrap, GTextAlignmentRight, NULL);
-        snprintf(temp_string, sizeof temp_string, "%d", g_tempmax);
-        graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorRed, GColorWhite));
-        graphics_draw_text(ctx, temp_string,
-                           fonts_get_system_font(FONT_KEY_GOTHIC_14),
-                           GRect(16-((g_tempmax<0)?5:0),0,18,15), GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
-        snprintf(temp_string, sizeof temp_string, "%d", g_tempmin);
-        graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite));
-        graphics_draw_text(ctx, temp_string,
-                           fonts_get_system_font(FONT_KEY_GOTHIC_14),
-                           GRect(16-((g_tempmin<0)?5:0),14,18,15), GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
-        snprintf(temp_string, sizeof temp_string, "%d", g_atemp);
-        graphics_context_set_text_color(ctx, GColorWhite);
-        graphics_draw_text(ctx, temp_string,
-                           fonts_get_system_font(FONT_KEY_GOTHIC_14),
-                           GRect(20,7,18,15), GTextOverflowModeWordWrap, GTextAlignmentRight, NULL);
-        snprintf(temp_string, sizeof temp_string, "%d", g_atempmax);
-        graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorRed, GColorWhite));
-        graphics_draw_text(ctx, temp_string,
-                           fonts_get_system_font(FONT_KEY_GOTHIC_14),
-                           GRect(38-((g_atempmax<0)?5:0),0,18,15), GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
-        snprintf(temp_string, sizeof temp_string, "%d", g_atempmin);
-        graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite));
-        graphics_draw_text(ctx, temp_string,
-                           fonts_get_system_font(FONT_KEY_GOTHIC_14),
-                           GRect(38-((g_atempmin<0)?5:0),14,18,15), GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
-    }
+    draw_weather_temp(ctx, g_temp, GColorWhite,
+                      GRect(0,7,18,15), GTextAlignmentRight);
+    draw_weather_temp(ctx, g_tempmax, PBL_IF_COLOR_ELSE(GColorRed, GColorWhite),
+                      GRect(16-((g_tempmax<0)?5:0),0,18,15),
+                      GTextAlignmentLeft);
+    draw_weather_temp(ctx, g_tempmin, PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite),
+                      GRect(16-((g_tempmin<0)?5:0),14,18,15),
+                      GTextAlignmentLeft);
+    draw_weather_temp(ctx, g_atemp, GColorWhite,
+                      GRect(20,7,18,15), GTextAlignmentRight);
+    draw_weather_temp(ctx, g_atempmax, PBL_IF_COLOR_ELSE(GColorRed, GColorWhite),
+                      GRect(38-((g_atempmax<0)?5:0),0,18,15),
+                      GTextAlignmentLeft);
+    draw_weather_temp(ctx, g_atempmin, PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite),
+                      GRect(38-((g_atempmin<0)?5:0),14,18,15),
+                      GTextAlignmentLeft);
 }
 
 static void on_weather_icon_layer_update(Layer* layer, GContext* ctx) {
@@ -694,12 +695,12 @@ static void init() {
   
     Tuplet initial_values[] = {
         TupletInteger(WEATHER_ICON_KEY, (uint8_t)0),
-        TupletInteger(WEATHER_ATEMPERATURE_KEY, (int8_t)101),
-        TupletInteger(WEATHER_ATEMPERATUREMAX_KEY, (int8_t)101),
-        TupletInteger(WEATHER_ATEMPERATUREMIN_KEY, (int8_t)101),
-        TupletInteger(WEATHER_TEMPERATURE_KEY, (int8_t)101),
-        TupletInteger(WEATHER_TEMPERATUREMAX_KEY, (int8_t)101),
-        TupletInteger(WEATHER_TEMPERATUREMIN_KEY, (int8_t)101),
+        TupletInteger(WEATHER_ATEMPERATURE_KEY, WEATHER_TEMP_UNKNOWN),
+        TupletInteger(WEATHER_ATEMPERATUREMAX_KEY, WEATHER_TEMP_UNKNOWN),
+        TupletInteger(WEATHER_ATEMPERATUREMIN_KEY, WEATHER_TEMP_UNKNOWN),
+        TupletInteger(WEATHER_TEMPERATURE_KEY, WEATHER_TEMP_UNKNOWN),
+        TupletInteger(WEATHER_TEMPERATUREMAX_KEY, WEATHER_TEMP_UNKNOWN),
+        TupletInteger(WEATHER_TEMPERATUREMIN_KEY, WEATHER_TEMP_UNKNOWN),
         TupletInteger(WEATHER_PRECIP_PROB_KEY, (uint8_t)0),
         TupletBytes(WEATHER_PRECIP_ARRAY_KEY, g_weather_precip_array, sizeof(g_weather_precip_array)),
         TupletInteger(WEATHER_HUMIDITY_KEY, (uint8_t)101),

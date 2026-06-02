@@ -4,6 +4,7 @@ var ReportSource = localStorage.getItem("ReportSource");
 var Clay = require('pebble-clay');
 var clayConfig = require('./config');
 var clay = new Clay(clayConfig, null, { autoHandleEvents: false });
+var WEATHER_TEMP_UNKNOWN = -128;
 
 Pebble.addEventListener('showConfiguration', function(e) {
   Pebble.openURL(clay.generateUrl());
@@ -39,8 +40,63 @@ var iconNameToId = {
   '02n': 10
 };
 
+function isFiniteNumber(value) {
+  return typeof value === 'number' && isFinite(value);
+}
+
 function roundValue(value, fallback) {
-  return typeof value === 'number' && isFinite(value) ? Math.round(value) : fallback;
+  return isFiniteNumber(value) ? Math.round(value) : fallback;
+}
+
+function roundTemperature(value) {
+  return roundValue(value, WEATHER_TEMP_UNKNOWN);
+}
+
+function collectFiniteValues(source, keys) {
+  var values = [];
+  if (!source) {return values;}
+  keys.forEach(function (key){
+    if (isFiniteNumber(source[key])) {
+      values.push(source[key]);
+    }
+  });
+  return values;
+}
+
+function buildDailyTemperatureBounds(day) {
+  var apparentTemps = collectFiniteValues(day && day.feels_like, ["day", "night", "eve", "morn"]);
+  return {
+    atempMax: apparentTemps.length ? Math.max.apply(null, apparentTemps) : null,
+    atempMin: apparentTemps.length ? Math.min.apply(null, apparentTemps) : null,
+    tempMax: day && day.temp && isFiniteNumber(day.temp.max) ? day.temp.max : null,
+    tempMin: day && day.temp && isFiniteNumber(day.temp.min) ? day.temp.min : null
+  };
+}
+
+function buildHourlyTemperatureBounds(hourlyData) {
+  var actualTemps = [];
+  var apparentTemps = [];
+  hourlyData = hourlyData || [];
+  for (var i=0; i<hourlyData.length; i++) {
+    if (isFiniteNumber(hourlyData[i] && hourlyData[i].temp)) {
+      actualTemps.push(hourlyData[i].temp);
+    }
+    if (isFiniteNumber(hourlyData[i] && hourlyData[i].feels_like)) {
+      apparentTemps.push(hourlyData[i].feels_like);
+    }
+  }
+  return {
+    atempMax: apparentTemps.length ? Math.max.apply(null, apparentTemps) : null,
+    atempMin: apparentTemps.length ? Math.min.apply(null, apparentTemps) : null,
+    tempMax: actualTemps.length ? Math.max.apply(null, actualTemps) : null,
+    tempMin: actualTemps.length ? Math.min.apply(null, actualTemps) : null
+  };
+}
+
+function temperatureOrFallback(primary, fallback) {
+  if (isFiniteNumber(primary)) {return roundTemperature(primary);}
+  if (isFiniteNumber(fallback)) {return roundTemperature(fallback);}
+  return WEATHER_TEMP_UNKNOWN;
 }
 
 function openWeatherIconToId(weather) {
@@ -61,7 +117,7 @@ function maxPopPercent(response) {
   var maxPop = null;
   for (var i=0; i<data.length; i++) {
     var pop = data[i] && data[i].pop;
-    if (typeof pop === 'number' && isFinite(pop)) {
+    if (isFiniteNumber(pop)) {
       maxPop = maxPop === null ? pop : Math.max(maxPop, pop);
     }
   }
@@ -69,8 +125,8 @@ function maxPopPercent(response) {
 }
 
 function interpolateNumber(a, b, fraction) {
-  var hasA = typeof a === 'number' && isFinite(a);
-  var hasB = typeof b === 'number' && isFinite(b);
+  var hasA = isFiniteNumber(a);
+  var hasB = isFiniteNumber(b);
   if (hasA && hasB) {return a+(b-a)*fraction;}
   if (hasA) {return a;}
   if (hasB) {return b;}
@@ -78,12 +134,12 @@ function interpolateNumber(a, b, fraction) {
 }
 
 function encodeGraphTemp(value) {
-  if (typeof value !== 'number' || !isFinite(value)) {return 255;}
+  if (!isFiniteNumber(value)) {return 255;}
   return Math.max(0, Math.min(254, Math.round(value)+100));
 }
 
 function encodeGraphPrecipProbability(value) {
-  if (typeof value !== 'number' || !isFinite(value)) {return 255;}
+  if (!isFiniteNumber(value)) {return 255;}
   return Math.max(0, Math.min(100, Math.round(value*100)));
 }
 
@@ -142,6 +198,8 @@ function sendWeather() {
             var pending = 4;
             var hasWeatherData = false;
             var json = {};
+            var dailyTemperatureBounds = null;
+            var hourlyTemperatureBounds = null;
             var query = "?lat="+pos.coords.latitude+"&lon="+pos.coords.longitude+"&units=metric&appid="+encodeURIComponent(OpenWeatherKey);
             var baseUrl = "https://api.openweathermap.org/data/4.0/onecall/";
 
@@ -153,6 +211,12 @@ function sendWeather() {
             function finishRequest() {
               pending -= 1;
               if (pending === 0 && hasWeatherData) {
+                dailyTemperatureBounds = dailyTemperatureBounds || {};
+                hourlyTemperatureBounds = hourlyTemperatureBounds || {};
+                put(2, temperatureOrFallback(dailyTemperatureBounds.atempMax, hourlyTemperatureBounds.atempMax)); // Celsius
+                put(3, temperatureOrFallback(dailyTemperatureBounds.atempMin, hourlyTemperatureBounds.atempMin)); // Celsius
+                put(5, temperatureOrFallback(dailyTemperatureBounds.tempMax, hourlyTemperatureBounds.tempMax));   // Celsius
+                put(6, temperatureOrFallback(dailyTemperatureBounds.tempMin, hourlyTemperatureBounds.tempMin));   // Celsius
                 Pebble.sendAppMessage(json);
               }
             }
@@ -162,8 +226,8 @@ function sendWeather() {
               var weather = current && current.weather && current.weather.length ? current.weather[0] : null;
               if (current) {
                 put(0, openWeatherIconToId(weather));                 // id - check the c source
-                put(1, roundValue(current.feels_like, 101));          // Celsius
-                put(4, roundValue(current.temp, 101));                // Celsius
+                put(1, roundTemperature(current.feels_like));          // Celsius
+                put(4, roundTemperature(current.temp));                // Celsius
                 put(9, roundValue(current.humidity, 101));            // Percents
                 put(10, roundValue(current.wind_speed*10, 1001));     // dm/s
               }
@@ -172,19 +236,9 @@ function sendWeather() {
 
             requestJson(baseUrl+"timeline/1day"+query, function (response){
               var day = firstData(response);
-              var apparentTemps = [];
-              if (day && day.feels_like) {
-                ["day", "night", "eve", "morn"].forEach(function (key){
-                  if (typeof day.feels_like[key] === 'number' && isFinite(day.feels_like[key])) {
-                    apparentTemps.push(day.feels_like[key]);
-                  }
-                });
-              }
               if (day) {
-                put(2, apparentTemps.length ? Math.round(Math.max.apply(null, apparentTemps)) : 101); // Celsius
-                put(3, apparentTemps.length ? Math.round(Math.min.apply(null, apparentTemps)) : 101); // Celsius
-                put(5, day.temp ? roundValue(day.temp.max, 101) : 101);                              // Celsius
-                put(6, day.temp ? roundValue(day.temp.min, 101) : 101);                              // Celsius
+                dailyTemperatureBounds = buildDailyTemperatureBounds(day);
+                hasWeatherData = true;
               }
               finishRequest();
             });
@@ -196,6 +250,7 @@ function sendWeather() {
                 if (data.length) {
                   var precipProb = maxPopPercent({data: data.slice(0, 25)});
                   var graphData = buildDayGraphData(data);
+                  hourlyTemperatureBounds = buildHourlyTemperatureBounds(data.slice(0, 25));
                   if (precipProb !== null) {
                     put(7, precipProb);                                                              // Percents
                   }
@@ -223,7 +278,7 @@ function sendWeather() {
                 var minuteData = [];
                 for (var i=0; i<60; i++) {
                   var minute = response.data[i];
-                  var precipitation = minute && typeof minute.precipitation === 'number' ? minute.precipitation : 0;
+                  var precipitation = minute && isFiniteNumber(minute.precipitation) ? minute.precipitation : 0;
                   minuteData.push(Math.min(Math.round(precipitation/10*255), 255)); // mm/h scaled to a byte
                 }
                 put(8, minuteData);
