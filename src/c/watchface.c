@@ -750,14 +750,14 @@ static void init() {
     Layer* window_layer = window_get_root_layer(g_window);
     GRect bounds = layer_get_frame(window_layer);
 
-    g_time_layer = text_layer_create(GRect(bounds.size.w-104, bounds.size.h-43-40-32, 102, 32));
+    g_time_layer = text_layer_create(GRect(bounds.size.w-134, bounds.size.h-43-40-32, 132, 42));
     layer_add_child(window_layer, text_layer_get_layer(g_time_layer));
     text_layer_set_background_color(g_time_layer, GColorBlack);
     text_layer_set_text_color(g_time_layer, GColorWhite);
-    text_layer_set_font(g_time_layer, fonts_get_system_font(FONT_KEY_LECO_32_BOLD_NUMBERS));
+    text_layer_set_font(g_time_layer, fonts_get_system_font(FONT_KEY_LECO_42_NUMBERS));
     text_layer_set_text_alignment(g_time_layer, GTextAlignmentRight);
 
-    g_date_layer = text_layer_create(GRect(bounds.size.w-70, bounds.size.h-43-40, 66, 30));
+    g_date_layer = text_layer_create(GRect(bounds.size.w-70, bounds.size.h-43-40+10, 66, 30));
     layer_add_child(window_layer, text_layer_get_layer(g_date_layer));
     text_layer_set_background_color(g_date_layer, GColorBlack);
     text_layer_set_text_color(g_date_layer, GColorWhite);
