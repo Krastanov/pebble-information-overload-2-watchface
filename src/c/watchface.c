@@ -24,6 +24,8 @@
 #define CALENDAR_ENTRY_COUNT 8
 #define CALENDAR_ROW_HEIGHT 14
 #define CALENDAR_BAR_WIDTH 3
+#define CALENDAR_BAR_Y_OFFSET 4
+#define CALENDAR_BAR_HEIGHT 12
 
 // TODO Add `const` where appropriate!
 // TODO not all memory is released?
@@ -519,9 +521,13 @@ static void on_calendar_layer_update(Layer* layer, GContext* ctx) {
         if (copy_len > 0) {
             graphics_context_set_fill_color(ctx,
                                             calendar_color(g_calendar_color_array[row_index]));
-            graphics_fill_rect(ctx, GRect(2, y + 2, CALENDAR_BAR_WIDTH,
-                                          CALENDAR_ROW_HEIGHT - 4),
-                               0, GCornerNone);
+            int16_t bar_y = y + CALENDAR_BAR_Y_OFFSET;
+            int16_t bar_height = min(CALENDAR_BAR_HEIGHT, bounds.size.h - bar_y);
+            if (bar_height > 0) {
+                graphics_fill_rect(ctx, GRect(2, bar_y, CALENDAR_BAR_WIDTH,
+                                              bar_height),
+                                   0, GCornerNone);
+            }
             graphics_context_set_text_color(ctx, GColorWhite);
             graphics_draw_text(ctx, row, font,
                                GRect(2 + CALENDAR_BAR_WIDTH + 2, y,
