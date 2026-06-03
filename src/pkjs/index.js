@@ -57,6 +57,17 @@ var iconNameToId = {
   '02n': 10
 };
 
+var calendarColorIdByName = {
+  green: 1,
+  blue: 2,
+  red: 3,
+  yellow: 4,
+  cyan: 5,
+  magenta: 6,
+  orange: 7,
+  purple: 8
+};
+
 function isFiniteNumber(value) {
   return typeof value === 'number' && isFinite(value);
 }
@@ -190,44 +201,49 @@ function truncateText(value, maxLength) {
   return value.substring(0, maxLength);
 }
 
-function cleanSingleLineText(value) {
+function trimText(value) {
   value = value || "";
-  value = value.replace(/\s+/g, " ");
   return value.replace(/^\s+|\s+$/g, "");
 }
 
-function splitCalendarUrls(value) {
-  var urls = [];
+function cleanSingleLineText(value) {
+  return trimText((value || "").replace(/\s+/g, " "));
+}
+
+function splitCommaList(value, keepEmpty) {
+  var items = [];
   var parts = (value || "").split(",");
   for (var i=0; i<parts.length; i++) {
-    var url = parts[i].replace(/^\s+|\s+$/g, "");
-    if (url) {
-      urls.push(url);
+    var item = trimText(parts[i]);
+    if (item || keepEmpty) {
+      items.push(item);
     }
   }
-  return urls;
+  return items;
 }
 
 function calendarColorId(value) {
-  value = cleanSingleLineText(value).toLowerCase();
-  if (value === "green") {return 1;}
-  if (value === "blue") {return 2;}
-  if (value === "red") {return 3;}
-  if (value === "yellow") {return 4;}
-  if (value === "cyan") {return 5;}
-  if (value === "magenta") {return 6;}
-  if (value === "orange") {return 7;}
-  if (value === "purple") {return 8;}
-  return 0;
+  return calendarColorIdByName[cleanSingleLineText(value).toLowerCase()] || 0;
 }
 
 function parseCalendarColors(value) {
   var colorIds = [];
-  var parts = (value || "").split(",");
+  var parts = splitCommaList(value, true);
   for (var i=0; i<parts.length; i++) {
     colorIds.push(calendarColorId(parts[i]));
   }
   return colorIds;
+}
+
+function registerCalendarTimezones(calendar) {
+  var timezones = calendar.getAllSubcomponents("vtimezone");
+  for (var i=0; i<timezones.length; i++) {
+    try {
+      ICAL.TimezoneService.register(timezones[i]);
+    } catch (e) {
+      console.log("Calendar timezone parse failed: " + e.message);
+    }
+  }
 }
 
 function padTwo(value) {
@@ -246,75 +262,97 @@ function calendarTimeToUnix(time) {
   return Math.floor(time.toJSDate().getTime()/1000);
 }
 
-function addCalendarOccurrence(events, item, startDate, endDate, nowUnix, limitUnix, colorId) {
-  if (!startDate) {return false;}
+function buildCalendarWindow(now) {
+  var startUnix = Math.floor(now.getTime()/1000);
+  return {
+    startUnix: startUnix,
+    endUnix: startUnix + CALENDAR_LOOKAHEAD_DAYS*24*60*60
+  };
+}
+
+function buildCalendarOccurrence(item, startDate, endDate, timeWindow, colorId) {
+  if (!startDate) {return null;}
 
   var startUnix = calendarTimeToUnix(startDate);
   var endUnix = endDate ? calendarTimeToUnix(endDate) : startUnix;
-  if (endUnix < nowUnix || startUnix > limitUnix) {return false;}
+  if (endUnix < timeWindow.startUnix || startUnix > timeWindow.endUnix) {return null;}
 
-  events.push({
-    startUnix: startUnix,
+  return {
     startDate: startDate,
+    startUnix: startUnix,
     summary: cleanSingleLineText(item && item.summary) || "(untitled)",
     colorId: colorId || 0
-  });
-  return true;
+  };
 }
 
-function collectRecurringCalendarEvents(events, event, nowUnix, limitUnix, colorId) {
+function calendarStartsAfterWindow(startDate, timeWindow) {
+  return startDate && calendarTimeToUnix(startDate) > timeWindow.endUnix;
+}
+
+function collectRecurringCalendarEvents(event, timeWindow, colorId) {
+  var events = [];
   var iterator = event.iterator();
   var occurrence = null;
   var scanCount = 0;
-  var eventCount = 0;
 
   while ((occurrence = iterator.next()) && scanCount < CALENDAR_RECURRENCE_SCAN_LIMIT) {
     scanCount += 1;
 
     var details = event.getOccurrenceDetails(occurrence);
     if (!details || !details.startDate) {continue;}
+    if (calendarStartsAfterWindow(details.startDate, timeWindow)) {break;}
 
-    var startUnix = calendarTimeToUnix(details.startDate);
-    if (startUnix > limitUnix) {break;}
-
-    if (addCalendarOccurrence(events, details.item || event, details.startDate,
-                              details.endDate,
-                              nowUnix, limitUnix, colorId)) {
-      eventCount += 1;
-    }
-    if (eventCount >= CALENDAR_MAX_EVENTS) {break;}
+    var calendarEvent = buildCalendarOccurrence(details.item || event,
+                                                details.startDate,
+                                                details.endDate,
+                                                timeWindow, colorId);
+    if (calendarEvent) {events.push(calendarEvent);}
+    if (events.length >= CALENDAR_MAX_EVENTS) {break;}
   }
+
+  return events;
+}
+
+function collectCalendarEventOccurrences(event, timeWindow, colorId) {
+  if (event.isRecurrenceException() || !event.startDate) {return [];}
+  if (event.isRecurring()) {
+    return collectRecurringCalendarEvents(event, timeWindow, colorId);
+  }
+
+  var calendarEvent = buildCalendarOccurrence(event, event.startDate, event.endDate,
+                                              timeWindow, colorId);
+  return calendarEvent ? [calendarEvent] : [];
+}
+
+function compareCalendarEvents(a, b) {
+  return a.startUnix - b.startUnix;
+}
+
+function limitCalendarEvents(events) {
+  events.sort(compareCalendarEvents);
+  return events.slice(0, CALENDAR_MAX_EVENTS);
 }
 
 function buildUpcomingCalendarEvents(icsText, now, colorId) {
   var calendar = new ICAL.Component(ICAL.parse(icsText));
+  registerCalendarTimezones(calendar);
   var components = calendar.getAllSubcomponents("vevent");
-  var nowUnix = Math.floor(now.getTime()/1000);
-  var limitUnix = nowUnix + CALENDAR_LOOKAHEAD_DAYS*24*60*60;
+  var timeWindow = buildCalendarWindow(now);
   var events = [];
 
   for (var i=0; i<components.length; i++) {
     try {
       var event = new ICAL.Event(components[i]);
-      if (event.isRecurrenceException()) {continue;}
-      if (!event.startDate) {continue;}
-
-      if (event.isRecurring()) {
-        collectRecurringCalendarEvents(events, event, nowUnix, limitUnix, colorId);
-      } else {
-        addCalendarOccurrence(events, event, event.startDate, event.endDate,
-                              nowUnix, limitUnix, colorId);
+      var occurrences = collectCalendarEventOccurrences(event, timeWindow, colorId);
+      for (var j=0; j<occurrences.length; j++) {
+        events.push(occurrences[j]);
       }
     } catch (e) {
       console.log("Calendar event parse failed: " + e.message);
     }
   }
 
-  events.sort(function(a, b) {
-    return a.startUnix - b.startUnix;
-  });
-
-  return events.slice(0, CALENDAR_MAX_EVENTS);
+  return limitCalendarEvents(events);
 }
 
 function buildCalendarMessage(events) {
@@ -332,6 +370,39 @@ function buildCalendarColorData(events) {
     colors.push(events[i].colorId || 0);
   }
   return colors;
+}
+
+function sendCalendarEvents(events) {
+  var visibleEvents = limitCalendarEvents(events);
+  var json = {};
+  json[CALENDAR_KEY] = buildCalendarMessage(visibleEvents);
+  json[CALENDAR_COLORS_KEY] = buildCalendarColorData(visibleEvents);
+  Pebble.sendAppMessage(json);
+}
+
+function requestCalendarEvents(url, colorId, now, done) {
+    var req = new XMLHttpRequest();
+    req.addEventListener("load", function (){
+        if (req.status && (req.status < 200 || req.status >= 300)) {
+            console.log("Calendar request failed: " + req.status + " " + url);
+            done(null);
+            return;
+        }
+
+        try {
+            done(buildUpcomingCalendarEvents(req.responseText || req.response || "",
+                                             now, colorId));
+        } catch (e) {
+            console.log("Calendar parse failed: " + e.message + " " + url);
+            done(null);
+        }
+    });
+    req.addEventListener("error", function (){
+        console.log("Calendar request failed: " + url);
+        done(null);
+    });
+    req.open("GET", url);
+    req.send();
 }
 
 function requestJson(url, done) {
@@ -499,7 +570,7 @@ function sendReport() {
 }
 
 function sendCalendar() {
-    var urls = splitCalendarUrls(CalendarUrls);
+    var urls = splitCommaList(CalendarUrls, false);
     if (!urls.length) {return;}
 
     var calendarColorIds = parseCalendarColors(CalendarColors);
@@ -513,44 +584,19 @@ function sendCalendar() {
         if (pending !== 0) {return;}
 
         if (sawCalendarData) {
-            allEvents.sort(function(a, b) {
-                return a.startUnix - b.startUnix;
-            });
-            var visibleEvents = allEvents.slice(0, CALENDAR_MAX_EVENTS);
-            var json = {};
-            json[CALENDAR_KEY] = buildCalendarMessage(visibleEvents);
-            json[CALENDAR_COLORS_KEY] = buildCalendarColorData(visibleEvents);
-            Pebble.sendAppMessage(json);
+            sendCalendarEvents(allEvents);
         }
     }
 
     for (var i=0; i<urls.length; i++) {
         (function (url, colorId){
-            var req = new XMLHttpRequest();
-            req.addEventListener("load", function (){
-                if (req.status && (req.status < 200 || req.status >= 300)) {
-                    console.log("Calendar request failed: " + req.status + " " + url);
-                    finishCalendarRequest();
-                    return;
-                }
-
-                try {
-                    allEvents = allEvents.concat(
-                        buildUpcomingCalendarEvents(req.responseText || req.response || "",
-                                                    now, colorId)
-                    );
+            requestCalendarEvents(url, colorId, now, function(events) {
+                if (events) {
+                    allEvents = allEvents.concat(events);
                     sawCalendarData = true;
-                } catch (e) {
-                    console.log("Calendar parse failed: " + e.message + " " + url);
                 }
                 finishCalendarRequest();
             });
-            req.addEventListener("error", function (){
-                console.log("Calendar request failed: " + url);
-                finishCalendarRequest();
-            });
-            req.open("GET", url);
-            req.send();
         })(urls[i], calendarColorIds[i] || 0);
     }
 }
