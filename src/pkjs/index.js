@@ -242,11 +242,16 @@ function formatCalendarTime(time) {
   return padTwo(date.getHours()) + ":" + padTwo(date.getMinutes());
 }
 
-function addCalendarOccurrence(events, item, startDate, nowUnix, limitUnix, colorId) {
-  if (!startDate) {return;}
+function calendarTimeToUnix(time) {
+  return Math.floor(time.toJSDate().getTime()/1000);
+}
 
-  var startUnix = startDate.toUnixTime();
-  if (startUnix < nowUnix || startUnix > limitUnix) {return;}
+function addCalendarOccurrence(events, item, startDate, endDate, nowUnix, limitUnix, colorId) {
+  if (!startDate) {return false;}
+
+  var startUnix = calendarTimeToUnix(startDate);
+  var endUnix = endDate ? calendarTimeToUnix(endDate) : startUnix;
+  if (endUnix < nowUnix || startUnix > limitUnix) {return false;}
 
   events.push({
     startUnix: startUnix,
@@ -254,6 +259,7 @@ function addCalendarOccurrence(events, item, startDate, nowUnix, limitUnix, colo
     summary: cleanSingleLineText(item && item.summary) || "(untitled)",
     colorId: colorId || 0
   });
+  return true;
 }
 
 function collectRecurringCalendarEvents(events, event, nowUnix, limitUnix, colorId) {
@@ -268,13 +274,14 @@ function collectRecurringCalendarEvents(events, event, nowUnix, limitUnix, color
     var details = event.getOccurrenceDetails(occurrence);
     if (!details || !details.startDate) {continue;}
 
-    var startUnix = details.startDate.toUnixTime();
+    var startUnix = calendarTimeToUnix(details.startDate);
     if (startUnix > limitUnix) {break;}
-    if (startUnix < nowUnix) {continue;}
 
-    addCalendarOccurrence(events, details.item || event, details.startDate,
-                          nowUnix, limitUnix, colorId);
-    eventCount += 1;
+    if (addCalendarOccurrence(events, details.item || event, details.startDate,
+                              details.endDate,
+                              nowUnix, limitUnix, colorId)) {
+      eventCount += 1;
+    }
     if (eventCount >= CALENDAR_MAX_EVENTS) {break;}
   }
 }
@@ -295,7 +302,8 @@ function buildUpcomingCalendarEvents(icsText, now, colorId) {
       if (event.isRecurring()) {
         collectRecurringCalendarEvents(events, event, nowUnix, limitUnix, colorId);
       } else {
-        addCalendarOccurrence(events, event, event.startDate, nowUnix, limitUnix, colorId);
+        addCalendarOccurrence(events, event, event.startDate, event.endDate,
+                              nowUnix, limitUnix, colorId);
       }
     } catch (e) {
       console.log("Calendar event parse failed: " + e.message);
