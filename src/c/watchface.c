@@ -56,7 +56,7 @@ static TextLayer* g_health_bpm_text_layer;    // Layer updated on heart beat eve
 static Layer* g_health_bpm_graph_layer;       // Layer updated on heart beat events or on minute ticks.
 static Layer* g_weather_temp_layer;           // Layer updated on weather events from PebbleKit messages.
 static Layer* g_weather_icon_layer;           // Layer updated on weather events from PebbleKit messages.
-static Layer* g_weather_precipprob_layer;     // Layer updated on weather events from PebbleKit messages.
+static TextLayer* g_weather_precipprob_layer; // Layer updated on weather events from PebbleKit messages.
 static Layer* g_weather_precipgraph_layer;    // Layer updated on weather events from PebbleKit messages or on minute ticks.
 static Layer* g_weather_detail_layer;         // Layer updated on weather events from PebbleKit messages or on minute ticks.
 static Layer* g_weather_day_graph_layer;      // Layer updated on weather events from PebbleKit messages or on minute ticks.
@@ -174,12 +174,8 @@ static bool weather_precipgraph_has_visible_values(void) {
     return false;
 }
 
-static bool weather_short_precip_has_visible_data(void) {
-    return g_precipprob > 0 || weather_precipgraph_has_visible_values();
-}
-
-static bool weather_short_precip_visible(void) {
-    return g_show_short_precipgraph && weather_short_precip_has_visible_data();
+static bool weather_short_precipgraph_visible(void) {
+    return g_show_short_precipgraph && weather_precipgraph_has_visible_values();
 }
 
 static uint8_t palette_size_for_format(GBitmapFormat format) {
@@ -345,21 +341,6 @@ static void on_weather_icon_layer_update(Layer* layer, GContext* ctx) {
     }
 }
 
-static void on_weather_precipprob_layer_update(Layer* layer, GContext* ctx) { // TODO make text layer with wrapping.
-    GRect bounds = layer_get_bounds(layer);
-    char percent_string[4];
-    if (g_show_short_precipgraph && g_precipprob > 0) {
-        snprintf(percent_string, sizeof percent_string, "%d", g_precipprob);
-        graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite));
-        graphics_draw_text(ctx, percent_string,
-                           fonts_get_system_font(FONT_KEY_GOTHIC_14),
-                           GRect(0,2,bounds.size.w,15), GTextOverflowModeWordWrap, GTextAlignmentRight, NULL);
-        graphics_draw_text(ctx, "%",
-                           fonts_get_system_font(FONT_KEY_GOTHIC_14),
-                           GRect(0,13,bounds.size.w,15), GTextOverflowModeWordWrap, GTextAlignmentRight, NULL);
-    }
-}
-
 static void on_weather_precipgraph_layer_update(Layer* layer, GContext* ctx) {
     if (!g_show_short_precipgraph) { return; }
 
@@ -424,7 +405,7 @@ static GRect weather_detail_cell(GRect bounds, uint8_t index) {
 
 static void on_weather_detail_layer_update(Layer* layer, GContext* ctx) {
     GRect bounds = layer_get_bounds(layer);
-    if (weather_short_precip_visible()) { return; }
+    if (weather_short_precipgraph_visible()) { return; }
 
     char value_string[5];
 
@@ -621,8 +602,9 @@ static void on_sync_error(DictionaryResult dict_error, AppMessageResult app_mess
 }
 
 static void on_sync_tuple_change(const uint32_t key, const Tuple* new_tuple, const Tuple* old_tuple, void* context) {
-    static char humidity_string[5];
+    static char humidity_string[8];
     static char wind_string[8];
+    static char precipprob_string[5];
     switch (key) {
         case WEATHER_ICON_KEY:
             g_weather_icon = new_tuple->value->uint8;
@@ -654,7 +636,12 @@ static void on_sync_tuple_change(const uint32_t key, const Tuple* new_tuple, con
             break;
         case WEATHER_PRECIP_PROB_KEY:
             g_precipprob = new_tuple->value->uint8;
-            layer_mark_dirty(g_weather_precipprob_layer);
+            if (g_precipprob > 0) {
+                snprintf(precipprob_string, sizeof precipprob_string, "%d%%", g_precipprob);
+                text_layer_set_text(g_weather_precipprob_layer, precipprob_string);
+            } else {
+                text_layer_set_text(g_weather_precipprob_layer, "");
+            }
             layer_mark_dirty(g_weather_detail_layer);
             break;
         case WEATHER_PRECIP_ARRAY_KEY: {
@@ -672,7 +659,7 @@ static void on_sync_tuple_change(const uint32_t key, const Tuple* new_tuple, con
         }
         case WEATHER_HUMIDITY_KEY:
             if (new_tuple->value->uint8 < 101) {
-                snprintf(humidity_string, sizeof humidity_string, "%d%%", new_tuple->value->uint8); 
+                snprintf(humidity_string, sizeof humidity_string, "%d%%rh", new_tuple->value->uint8);
                 text_layer_set_text(g_weather_humidity_layer, humidity_string);
             }
             break;
@@ -814,17 +801,10 @@ static void init() {
     layer_set_update_proc(g_weather_day_graph_layer, &on_weather_day_graph_layer_update);
     layer_add_child(window_layer, g_weather_day_graph_layer);
 
-    int weather_precipprob_width = 16;
     GRect weather_precipgraph_frame = GRect(bounds.size.w-50, bounds.size.h-27, 49, 27);
     g_show_short_precipgraph =
-        weather_day_graph_frame.origin.x+weather_day_graph_frame.size.w+1+
-        weather_precipprob_width+1+weather_precipgraph_frame.size.w <= bounds.size.w;
-    int weather_precipprob_x = weather_precipgraph_frame.origin.x-weather_precipprob_width-1;
-    g_weather_precipprob_layer = layer_create(GRect(weather_precipprob_x, bounds.size.h-30, weather_precipprob_width, 30));
-    layer_set_update_proc(g_weather_precipprob_layer, &on_weather_precipprob_layer_update);
-    if (g_show_short_precipgraph) {
-        layer_add_child(window_layer, g_weather_precipprob_layer);
-    }
+        weather_day_graph_frame.origin.x+weather_day_graph_frame.size.w+1 <=
+        weather_precipgraph_frame.origin.x;
     
     g_weather_precipgraph_layer = layer_create(weather_precipgraph_frame);
     layer_set_update_proc(g_weather_precipgraph_layer, &on_weather_precipgraph_layer_update);
@@ -832,24 +812,31 @@ static void init() {
         layer_add_child(window_layer, g_weather_precipgraph_layer);
     }
 
-    GRect weather_detail_frame = GRect(weather_precipprob_x, bounds.size.h-30,
-                                       weather_precipprob_width+1+weather_precipgraph_frame.size.w,
-                                       30);
+    int weather_detail_x = weather_day_graph_frame.origin.x+
+                           weather_day_graph_frame.size.w+1;
+    GRect weather_detail_frame = GRect(weather_detail_x, bounds.size.h-30,
+                                       bounds.size.w-weather_detail_x-1, 30);
     g_weather_detail_layer = layer_create(weather_detail_frame);
     layer_set_update_proc(g_weather_detail_layer, &on_weather_detail_layer_update);
     layer_add_child(window_layer, g_weather_detail_layer);
 
-    g_weather_humidity_layer = text_layer_create(GRect(1, bounds.size.h-42, 30, 14));
+    g_weather_humidity_layer = text_layer_create(GRect(1, bounds.size.h-42, 44, 14));
     layer_add_child(window_layer, text_layer_get_layer(g_weather_humidity_layer));
     text_layer_set_background_color(g_weather_humidity_layer, GColorBlack);
     text_layer_set_text_color(g_weather_humidity_layer, GColorWhite);
     text_layer_set_font(g_weather_humidity_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
 
-    g_weather_wind_layer = text_layer_create(GRect(31, bounds.size.h-42, 40, 14));
+    g_weather_wind_layer = text_layer_create(GRect(42, bounds.size.h-42, 39, 14));
     layer_add_child(window_layer, text_layer_get_layer(g_weather_wind_layer));
     text_layer_set_background_color(g_weather_wind_layer, GColorBlack);
     text_layer_set_text_color(g_weather_wind_layer, GColorWhite);
     text_layer_set_font(g_weather_wind_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
+
+    g_weather_precipprob_layer = text_layer_create(GRect(82, bounds.size.h-42, 30, 14));
+    layer_add_child(window_layer, text_layer_get_layer(g_weather_precipprob_layer));
+    text_layer_set_background_color(g_weather_precipprob_layer, GColorBlack);
+    text_layer_set_text_color(g_weather_precipprob_layer, PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite));
+    text_layer_set_font(g_weather_precipprob_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
 
     
     // Health
@@ -948,7 +935,7 @@ static void deinit() {
     layer_destroy(g_health_bpm_graph_layer);
     layer_destroy(g_weather_temp_layer);
     layer_destroy(g_weather_icon_layer);
-    layer_destroy(g_weather_precipprob_layer);
+    text_layer_destroy(g_weather_precipprob_layer);
     layer_destroy(g_weather_precipgraph_layer);
     layer_destroy(g_weather_detail_layer);
     layer_destroy(g_weather_day_graph_layer);
